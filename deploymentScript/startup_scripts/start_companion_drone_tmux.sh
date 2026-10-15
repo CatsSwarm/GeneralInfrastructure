@@ -43,6 +43,8 @@ source "${SCRIPT_DIR}/util/companion_gps_module.sh"
 source "${SCRIPT_DIR}/util/companion_vio.sh"
 # shellcheck disable=SC1091
 source "${SCRIPT_DIR}/util/companion_tmux.sh"
+# shellcheck disable=SC1091
+source "${SCRIPT_DIR}/companion_identity.sh"
 
 _activate_companion_conda() {
     if [ -n "${COMPANION_RUN_IN_RL:-}" ] && [ -x "${COMPANION_RUN_IN_RL}" ] && [ -x "${PYTHON:-}" ]; then
@@ -396,6 +398,16 @@ if ! [[ "${DRONE_ID}" =~ ^[0-9]+$ ]] || [ "${DRONE_ID}" -lt 1 ]; then
     exit 1
 fi
 
+# A 1..9 id in /etc/default/companion-drone replaces DRONE_ID before config
+# lookup and before HW_CMD. A missing or invalid file leaves the argument.
+_COMPANION_FILE_ID="$(companion_file_id /etc/default/companion-drone)"
+if [ -n "${_COMPANION_FILE_ID}" ]; then
+    if [ "${_COMPANION_FILE_ID}" != "${DRONE_ID}" ]; then
+        echo "Using COMPANION_DRONE_ID=${_COMPANION_FILE_ID} from /etc/default/companion-drone (argument was ${DRONE_ID})." >&2
+    fi
+    DRONE_ID="${_COMPANION_FILE_ID}"
+fi
+
 VERSION_UPPER="$(printf '%s' "${VERSION}" | tr '[:lower:]' '[:upper:]')"
 if [ "${VERSION_UPPER}" = "PYTHON" ]; then
     VERSION_UPPER="PY"
@@ -575,6 +587,15 @@ echo "  RTK mode: ${COMPANION_RTK_MODE} → ${COMPANION_RTK_ZMQ_URL}"
 echo "  RTK sink: ${COMPANION_RTK_SINK}"
 echo "  COMM:     ${COMPANION_COMM_FABRIC} gs=${COMPANION_COMM_GS_HOST}"
 echo "  GPS module: ${COMPANION_GPS_MODULE} → ${COMPANION_GPS_WINDOW}"
+# Stale hardware_adapter_<n> / vio_<n> windows in catswarm_sim are dropped
+# after preflight, immediately before the hardware adapter starts.
+if command -v tmux >/dev/null 2>&1 && tmux has-session -t catswarm_sim 2>/dev/null; then
+    while IFS= read -r _stale_window; do
+        [ -n "${_stale_window}" ] || continue
+        echo "Dropping stale window catswarm_sim:${_stale_window}" >&2
+        tmux kill-window -t "catswarm_sim:${_stale_window}" 2>/dev/null || true
+    done < <(tmux list-windows -t catswarm_sim -F '#{window_name}' | companion_windows_to_drop "${DRONE_ID}" || true)
+fi
 "${HW_CMD[@]}"
 
 # After mavlink-server clients exist: request IMU/OF on the QGC TCP path.
