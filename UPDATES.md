@@ -2,6 +2,10 @@
 
 This file documents the development progress and changes made to the `CatSwarm/general_infrastructure` project by the AI agent.
 
+## [2026-10-15] Iris velocity calibration spec and plan
+- Spec `docs/superpowers/specs/2026-10-15-iris-velocity-calibration-design.md` (approved): fit the Gazebo iris model to the three Baseball ULG velocity responses; PX4 `MPC_`/`MC_` setup comes from the log; Quadcopter_SimCon is a same-command comparison, not a second fit.
+- Plan `docs/superpowers/plans/2026-10-15-iris-velocity-calibration.md`: parallel test-first waves. No Gazebo run in the unit tests.
+
 ## [2026-09-20] Companion tmux pipe-pane + persistent journald
 - After HA/SM/VIO windows exist, `companion_tmux_pipe_session` `pipe-pane -o`s every pane to `~/RL/logs/tmux/<UTC>_<session_window_pane>.log`.
 - `install-companion-boot.sh` writes `/etc/systemd/journald.d/companion-persistent.conf` (`Storage=persistent`) and restarts journald before enabling `companion-drone.service`.
