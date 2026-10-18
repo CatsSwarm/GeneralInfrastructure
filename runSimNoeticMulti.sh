@@ -181,6 +181,7 @@ if [ "$POSITIONS_FILE" = "$DEFAULT_POSITIONS" ]; then
         --volume="${SCRIPT_DIR}/multidrone/sitl_multiple_run.sh:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_multiple_run2.sh:rw"
         --volume="${SCRIPT_DIR}/multidrone/inject_iris_sensors.py:/home/valentin/PX4-Autopilot/Tools/simulation/inject_iris_sensors.py:ro"
         --volume="${SCRIPT_DIR}/multidrone/inject_iris_colors.py:/home/valentin/PX4-Autopilot/Tools/simulation/inject_iris_colors.py:ro"
+        --volume="${SCRIPT_DIR}/calibration/models/iris/iris.sdf.jinja:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/iris/iris.sdf.jinja:ro"
         --volume="${SCRIPT_DIR}/multidrone/vio_cam_tcp.py:/home/valentin/PX4-Autopilot/Tools/simulation/vio_cam_tcp.py:ro"
         --volume="${SCRIPT_DIR}/multidrone/spawn_cylinders.py:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/spawn_cylinders.py:ro"
         --volume="${SCRIPT_DIR}/multidrone/airframes/10015_gazebo-classic_iris.post:/home/valentin/PX4-Autopilot/build/px4_sitl_default/etc/init.d-posix/airframes/10015_gazebo-classic_iris.post:ro"
@@ -196,6 +197,7 @@ else
         --volume="${SCRIPT_DIR}/multidrone/sitl_multiple_run.sh:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_multiple_run2.sh:rw"
         --volume="${SCRIPT_DIR}/multidrone/inject_iris_sensors.py:/home/valentin/PX4-Autopilot/Tools/simulation/inject_iris_sensors.py:ro"
         --volume="${SCRIPT_DIR}/multidrone/inject_iris_colors.py:/home/valentin/PX4-Autopilot/Tools/simulation/inject_iris_colors.py:ro"
+        --volume="${SCRIPT_DIR}/calibration/models/iris/iris.sdf.jinja:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/iris/iris.sdf.jinja:ro"
         --volume="${SCRIPT_DIR}/multidrone/vio_cam_tcp.py:/home/valentin/PX4-Autopilot/Tools/simulation/vio_cam_tcp.py:ro"
         --volume="${SCRIPT_DIR}/multidrone/spawn_cylinders.py:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/spawn_cylinders.py:ro"
         --volume="${SCRIPT_DIR}/multidrone/airframes/10015_gazebo-classic_iris.post:/home/valentin/PX4-Autopilot/build/px4_sitl_default/etc/init.d-posix/airframes/10015_gazebo-classic_iris.post:ro"
@@ -209,6 +211,20 @@ if [ -f "$XAUTH_FILE" ]; then
 fi
 
 PX4_HOME_ENV=()
+# Host Nouveau DRI aborts gzserver (libGL dri screen, then vector::_M_default_append).
+# Pass software GL only when the caller set it. Default launches stay on the GPU.
+EXTRA_ENV=()
+if [ -n "${LIBGL_ALWAYS_SOFTWARE:-}" ]; then
+    EXTRA_ENV+=(--env="LIBGL_ALWAYS_SOFTWARE=${LIBGL_ALWAYS_SOFTWARE}")
+fi
+# Indirect GLX on this host aborts gzserver inside glXCreateContext. HEADLESS=1
+# clears DISPLAY so Gazebo disables rendering. The ray lidar and optical-flow
+# mockup do not need it. Default launches still pass the host display.
+SIM_DISPLAY="${DISPLAY}"
+if [ "${HEADLESS:-0}" = "1" ]; then
+    SIM_DISPLAY=""
+    EXTRA_ENV+=(--env="HEADLESS=1")
+fi
 if [[ "$WORLD" != "empty" && "$WORLD" != "cylinders" ]]; then
     DOCKER_VOLUMES+=(--volume="${WORLD_FILE}:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/${WORLD}.world:ro")
     PX4_HOME_ENV=(
@@ -223,10 +239,17 @@ fi
 # "Exception sending a multicast message: Network is unreachable" on hosts
 # with no working multicast route; after a while simulator_mavlink poll
 # timeouts freeze HIL (DISTANCE_SENSOR / OF / IMU stop → FLIG bottom_clearance=-1).
-docker run -it --net=host \
+# -it aborts gzserver on this host (gazebo transport "Header is empty" /
+# std::length_error) once the full volume set is attached. Headless runs
+# have no client to attach, so they skip the TTY.
+DOCKER_TTY=(-it)
+if [ "${HEADLESS:-0}" = "1" ]; then
+    DOCKER_TTY=()
+fi
+docker run "${DOCKER_TTY[@]}" --net=host \
            --cap-drop=all \
            --privileged \
-           --env="DISPLAY=$DISPLAY" \
+           --env="DISPLAY=${SIM_DISPLAY}" \
            --env="QT_X11_NO_MITSHM=1" \
            --env="CATSWARM_OF_MODE=${CATSWARM_OF_MODE:-mockup}" \
            --env="CATSWARM_VIO_CAM=${VIO_CAM}" \
@@ -237,6 +260,7 @@ docker run -it --net=host \
            --env="GAZEBO_MASTER_URI=http://127.0.0.1:11345" \
            --env="XAUTHORITY=${XAUTH_FILE}" \
            "${PX4_HOME_ENV[@]}" \
+           "${EXTRA_ENV[@]}" \
            "${DOCKER_VOLUMES[@]}" \
            --name=${CONTAINER_NAME} \
            ${CONTAINER_NAME} \

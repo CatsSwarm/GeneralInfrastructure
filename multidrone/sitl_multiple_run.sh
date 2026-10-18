@@ -281,5 +281,10 @@ else
 	echo "WARNING: $VIO_CAM_TCP missing — no SVOF camera TCP"
 fi
 
-echo "Starting gazebo client"
-gzclient
+if [ "${HEADLESS:-0}" = "1" ]; then
+	echo "HEADLESS=1 — leaving gzserver up without gzclient"
+	wait
+else
+	echo "Starting gazebo client"
+	gzclient
+fi

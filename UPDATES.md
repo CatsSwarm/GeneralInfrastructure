@@ -2,6 +2,28 @@
 
 This file documents the development progress and changes made to the `CatSwarm/general_infrastructure` project by the AI agent.
 
+## [2026-10-17] Iris cascade calibration
+- `python3 -m calibration.run_cascade` reads a ULG (default `calibration/log_2_UnknownDate.ulg`) and writes the mounted iris jinja plus `calibration/iris_controller.json`.
+- Order: hover `motorConstant` so command `h` holds 1.5 kg, then one `|x|` and one `|y|` arm, then angle, velocity, and position gains. Rate gains, yaw, mass, and inertia stay put. No numeric pass gate. Closeness is unshifted per-axis RMS.
+- Live replay is headless one iris on an empty world, port 14541. Integer `MC_`/`MPC_` parameters go out as INT32. The scored clock starts when the vehicle is armed in offboard. The stream is 50 Hz. Pytest does not start Gazebo. `python3 -m pytest calibration/tests -q` — 63 passed.
+
+## [2026-10-16] Iris cascade calibration spec
+- Spec `docs/superpowers/specs/2026-10-16-iris-cascade-calibration-design.md` (approved): one Python program reads a PX4 ULG and writes the mounted iris jinja plus `calibration/iris_controller.json`. Flight is `calibration/log_2_UnknownDate.ulg`.
+- Order: hover `motorConstant` so command `h` holds 1.5 kg, then rotor `|x|`/`|y|` on roll/pitch rate, then angle, velocity, and position gains. Yaw, mass, and inertia stay put. No numeric pass gate. Replaces the Baseball free search for this flight.
+- Plan `docs/superpowers/plans/2026-10-16-iris-cascade-calibration.md`. Unit tests do not start Gazebo.
+
+## [2026-10-16] Iris search scored, not accepted
+- One coordinate-descent pass (center plus 18 neighbors) on the three Baseball logs. None met vx ≤ 0.20, vy ≤ 0.10, vz ≤ 0.08. Kept the smallest RMS sum: `motor_constant` 2.92e-06, other eight fields stock (mass 1.5, ixx/iyy 0.029125, izz 0.055225, moment 0.06, time up/down 0.0125/0.025, rotor drag 0.000175). `accepted` is false.
+- Iris RMS (selected set) cat2 0.611/0.080/0.075, cat3 0.663/0.275/0.100, cat4 0.644/0.226/0.098 (vx/vy/vz). Stock center was cat2 0.327/0.221/0.907, cat3 0.662/0.275/0.110, cat4 0.652/0.228/0.099. SimCon, not fitted: cat2 0.070/0.041/0.056, cat3 0.072/0.051/0.047, cat4 0.080/0.061/0.055. Report: `calibration/results/velocity_report.json`.
+- `run_search` writes `calibration/results/iris/<stem>.csv` only for the selected candidate, so `run_compare` does not score the last neighbor. Pytest: `python3 -m pytest calibration/tests -q` (37 passed).
+- This host's indirect GLX aborts `gzserver` (`glXCreateContext`, then `Header is empty` / `std::length_error`). `HEADLESS=1 ./runSimNoeticMulti.sh` clears `DISPLAY`, skips `docker -it`, and the sitl script waits instead of running `gzclient`. Ray lidar and the optical-flow mockup do not need rendering. First vehicle is `px4 -i 1` (onboard mavlink remote port 14541).
+
+## [2026-10-16] Iris velocity calibration
+- `calibration/` loads the three Baseball ULGs, scores unshifted airborne RMS (accept at vx ≤ 0.20, vy ≤ 0.10, vz ≤ 0.08), patches the host iris jinja, and writes `calibration/results/velocity_report.json`. Quadcopter_SimCon is not edited.
+- Both `runSimNoeticMulti.sh` volume lists bind-mount `calibration/models/iris/iris.sdf.jinja` read-only over the in-image iris jinja. Restart the sim after a search write.
+- Log replay does not position-hold. Synthetic iris replay holds only with `--position-hold`. A missing synthetic CSV does not change `accepted`. Pytest: `python3 -m pytest calibration/tests -q` (36 passed).
+- Open: a multi-candidate search overwrites the same three iris CSVs, so `run_compare` reads the last neighbor. Log warmup still sends the first velocity setpoint before the series clock.
+
 ## [2026-10-15] Iris velocity calibration spec and plan
 - Spec `docs/superpowers/specs/2026-10-15-iris-velocity-calibration-design.md` (approved): fit the Gazebo iris model to the three Baseball ULG velocity responses; PX4 `MPC_`/`MC_` setup comes from the log; Quadcopter_SimCon is a same-command comparison, not a second fit.
 - Plan `docs/superpowers/plans/2026-10-15-iris-velocity-calibration.md`: parallel test-first waves. No Gazebo run in the unit tests.
