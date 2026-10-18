@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Fit a repo-local Gazebo iris model so its `vx`, `vy`, and `vz` follow the three Baseball ULG flights, then report the same commands flown in Quadcopter_SimCon.
+**Goal:** Fit a host-side Gazebo iris model, bind-mounted into the Noetic container with `--volume`, so its `vx`, `vy`, and `vz` follow the three Baseball ULG flights, then report the same commands flown in Quadcopter_SimCon.
 
-**Architecture:** Pure Python pieces (log reader, RMS score, synthetic commands, SDF patch, report) are unit-tested and share locked dataclasses. A later search script replays velocity setpoints on Noetic SITL and writes the winning model. SimCon is imported and stepped from this repo; none of its files change.
+**Architecture:** Pure Python pieces (log reader, RMS score, synthetic commands, jinja patch, report) are unit-tested and share locked dataclasses. The model Gazebo reads is `calibration/models/iris/iris.sdf.jinja` on the host. `runSimNoeticMulti.sh` bind-mounts that file over the in-image jinja. A later search writes that host file and the sim is restarted. SimCon is imported and stepped from this repo; none of its files change.
 
 **Tech Stack:** Python 3, pytest, numpy, pyulog, pymavlink; Gazebo Classic iris on `runSimNoeticMulti.sh`; Quadcopter_SimCon at `/home/valentin/RL/CatSwarm/TrainingRoom/Quadcopter_SimCon`.
 
@@ -19,7 +19,8 @@
 - Synthetic commands stay within 5 m/s on `vx` and on `vy`. They are not part of the accept score.
 - PX4 parameters that may be sent to SITL match `^(MPC_|MC_)` from that log's initial set. Do not send `EKF2_`, `SYS_`, `BAT_`, `GPS_`, `CA_`, `PWM_`, or `SENS_` (a real-airframe dump will not boot Gazebo).
 - `MPC_THR_HOVER` stays 0.5. Do not edit it to suit the model.
-- Adjust only iris `base_link` mass and inertia, and the four `libgazebo_motor_model.so` fields `motorConstant`, `momentConstant`, `timeConstantUp`, `timeConstantDown`, `rotorDragCoefficient`. Do not change rotor-link mass, geometry, or `inject_iris_sensors.py`.
+- Adjust only iris `base_link` mass and inertia, and the `libgazebo_motor_model.so` fields `motorConstant`, `momentConstant`, `timeConstantUp`, `timeConstantDown`, `rotorDragCoefficient`. Do not change rotor-link mass, geometry, or `inject_iris_sensors.py`.
+- The iris model file is `calibration/models/iris/iris.sdf.jinja`. Both docker `--volume` lists mount it read-only over `/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/iris/iris.sdf.jinja`. Do not `COPY` or `docker cp` it into the image.
 - Do not edit any file under `TrainingRoom/Quadcopter_SimCon`.
 - Sim: one iris, empty world, Noetic Gazebo Classic. No network, no system manager.
 - **No git commit or push** unless the user explicitly asks.
@@ -44,9 +45,9 @@ The parent session coordinates. It does not write the production code.
 
 These are the failures the spec allows if a task forgets them. Each has a test in the owning task.
 
+- A `COPY` of `iris.sdf.jinja` into the image must not be how the model arrives; the container sees the host file only through `--volume` (Task 5).
 - A trace that matches the log only after a 0.2 s shift must still fail the unshifted RMS (Task 2).
 - `EKF2_GPS_CTRL` from a log must not be in the parameter set sent to SITL (Task 1).
-- Patching dynamics must leave `rotor_0` mass alone (Task 4).
 - No synthetic sample may exceed 5 m/s on `vx` or `vy` (Task 3).
 - One log with `vx` RMS 0.21 rejects the set even when the other eight numbers are 0 (Task 2).
 
@@ -57,9 +58,10 @@ These are the failures the spec allows if a task forgets them. Each has a test i
 | `calibration/ulg_velocity.py` | Load one ULG into command, response, `z`, and initial parameters |
 | `calibration/score.py` | Unshifted airborne RMS and accept/select rules |
 | `calibration/synthetic.py` | The 18 synthetic cases |
-| `calibration/iris_dynamics.py` | JSON load/save and SDF patch |
+| `calibration/iris_dynamics.py` | JSON load/save and jinja patch |
 | `calibration/iris_dynamics.json` | Stock iris numbers until a search overwrites them |
-| `calibration/apply_iris_dynamics.py` | CLI: `sdf_path json_path` |
+| `calibration/models/iris/iris.sdf.jinja` | The model file. Host copy of the PX4 v1.17 iris jinja. This is what `--volume` mounts |
+| `calibration/apply_iris_dynamics.py` | CLI: `jinja_path json_path` writes the host model |
 | `calibration/offboard_stream.py` | Type mask, bind port, setpoint grid |
 | `calibration/replay_offboard.py` | Live MAVLink replay. Not imported by tests |
 | `calibration/simcon_velocity.py` | Step Quadcopter_SimCon from a velocity series |
@@ -68,8 +70,7 @@ These are the failures the spec allows if a task forgets them. Each has a test i
 | `calibration/run_search.py` | Live SITL search. Pytest calls only `candidate_count` |
 | `calibration/run_compare.py` | Live SimCon compare. Not imported by tests |
 | `calibration/tests/test_*.py` | Unit tests, no Gazebo and no SimCon process |
-| `multidrone/sitl_multiple_run.sh` | Apply the JSON to `/tmp/iris_N.sdf` after color inject |
-| `runSimNoeticMulti.sh` | Bind-mount the applier and the JSON |
+| `runSimNoeticMulti.sh` | Bind-mount the host jinja over the in-image iris jinja, both volume lists |
 
 ---
 
@@ -310,11 +311,12 @@ Expected: PASS
 
 ---
 
-### Task 4: Iris dynamics file and SDF patch
+### Task 4: Iris dynamics and the host model file
 
 **Files:**
 - Create: `calibration/iris_dynamics.py`
 - Create: `calibration/iris_dynamics.json`
+- Create: `calibration/models/iris/iris.sdf.jinja`
 - Create: `calibration/apply_iris_dynamics.py`
 - Test: `calibration/tests/test_iris_dynamics.py`
 
@@ -323,12 +325,14 @@ Expected: PASS
 - Produces:
   - `@dataclass(frozen=True) class IrisDynamics` with fields `mass_kg`, `ixx`, `iyy`, `izz`, `motor_constant`, `moment_constant`, `time_constant_up`, `time_constant_down`, `rotor_drag_coefficient` (all `float`)
   - `STOCK: IrisDynamics` = mass `1.5`, ixx `0.029125`, iyy `0.029125`, izz `0.055225`, motor_constant `5.84e-06`, moment_constant `0.06`, time_constant_up `0.0125`, time_constant_down `0.025`, rotor_drag_coefficient `0.000175`
+  - `IRIS_MODEL_JINJA: Path` = `calibration/models/iris/iris.sdf.jinja` relative to the repo root
   - `load_dynamics(path: Path) -> IrisDynamics`
   - `save_dynamics(path: Path, dynamics: IrisDynamics) -> None`
-  - `apply_to_sdf(sdf_path: Path, dynamics: IrisDynamics) -> None` — writes the file in place
-  - CLI `python3 calibration/apply_iris_dynamics.py SDF JSON` calls `load_dynamics` then `apply_to_sdf` and returns exit 0
+  - `apply_to_sdf(sdf_path: Path, dynamics: IrisDynamics) -> None` — writes that file in place. Same function for the jinja, which is SDF plus `{{ }}` placeholders
+  - `publish_dynamics(dynamics: IrisDynamics, json_path: Path, model_path: Path) -> None` — `save_dynamics` then `apply_to_sdf`
+  - CLI `python3 calibration/apply_iris_dynamics.py JINJA JSON` calls `load_dynamics` then `apply_to_sdf` and returns exit 0
 
-`calibration/iris_dynamics.json` is `STOCK`.
+`calibration/iris_dynamics.json` is `STOCK`. `calibration/models/iris/iris.sdf.jinja` is the stock PX4 v1.17.0 file from the `px4-noetic-sim-ros` image at `Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/iris/iris.sdf.jinja`, copied out with `docker run --rm --entrypoint cat`. Do not copy meshes. Do not add a `COPY` of this file to `Dockerfiles/PX4NoeticSimNvidia.dockerfile`. After the copy, `base_link` mass is still `1.5` and `{{ mavlink_tcp_port }}` is still in the file.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -341,9 +345,11 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from calibration.iris_dynamics import (  # noqa: E402
+    IRIS_MODEL_JINJA,
     STOCK,
     apply_to_sdf,
     load_dynamics,
+    publish_dynamics,
     save_dynamics,
 )
 
@@ -387,6 +393,23 @@ def test_stock_json_roundtrip_and_rotor_mass_untouched(tmp_path: Path):
     assert "<mass>1.5</mass>" in restored
     assert "<mass>0.005</mass>" in restored
 
+def test_host_jinja_is_the_mounted_model():
+    text = (ROOT / IRIS_MODEL_JINJA).read_text(encoding="utf-8")
+    assert "{{ mavlink_tcp_port }}" in text
+    assert "link name='base_link'" in text or 'link name="base_link"' in text
+    assert "<mass>1.5</mass>" in text
+    docker = (ROOT / "Dockerfiles" / "PX4NoeticSimNvidia.dockerfile").read_text(encoding="utf-8")
+    assert "iris.sdf.jinja" not in docker
+
+def test_publish_writes_json_and_model(tmp_path: Path):
+    model = tmp_path / "iris.sdf.jinja"
+    model.write_text(SDF, encoding="utf-8")
+    js = tmp_path / "dyn.json"
+    tuned = STOCK.__class__(0.8, 0.01, 0.02, 0.03, 1e-5, 0.05, 0.02, 0.03, 0.001)
+    publish_dynamics(tuned, js, model)
+    assert load_dynamics(js).mass_kg == pytest.approx(0.8)
+    assert "<mass>0.8</mass>" in model.read_text(encoding="utf-8")
+
 def _tag(text: str, name: str) -> float:
     start = text.index(f"<{name}>") + len(name) + 2
     end = text.index(f"</{name}>")
@@ -399,9 +422,9 @@ Run: `python3 -m pytest calibration/tests/test_iris_dynamics.py -v`
 
 Expected: FAIL with import error for `calibration.iris_dynamics`
 
-- [ ] **Step 3: Implement the dataclass, JSON, and `apply_to_sdf`**
+- [ ] **Step 3: Implement the dataclass, JSON, `apply_to_sdf`, and copy the host jinja**
 
-Change `mass`, `ixx`, `iyy`, `izz` only inside `link name="base_link"` (quotes may be single or double). Change the five plugin fields on every `libgazebo_motor_model.so` plugin. Leave every other `mass` element alone. A second apply with different numbers replaces the first.
+Change `mass`, `ixx`, `iyy`, `izz` only inside `link name="base_link"` (quotes may be single or double). Change the five plugin fields on every `libgazebo_motor_model.so` plugin. Leave every other `mass` element alone, including `rotor_0`. A second apply with different numbers replaces the first. `publish_dynamics` saves the JSON, then patches the model path. Copy the stock jinja out of `px4-noetic-sim-ros` into `IRIS_MODEL_JINJA` without changing its dynamics.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -411,19 +434,21 @@ Expected: PASS
 
 ---
 
-### Task 5: Spawn hook
+### Task 5: Bind-mount the host iris model
 
 **Files:**
-- Modify: `multidrone/sitl_multiple_run.sh` (the iris block after `inject_iris_colors.py`)
 - Modify: `runSimNoeticMulti.sh` (both `DOCKER_VOLUMES` arrays)
 - Test: `calibration/tests/test_spawn_hook.py`
 
 **Interfaces:**
-- Consumes: `calibration/apply_iris_dynamics.py` and `calibration/iris_dynamics.json` from Task 4
-- Produces: on iris spawn, `python3` applies the JSON to `/tmp/${MODEL}_${N}.sdf` after the color inject. Both docker volume lists mount:
-  - `${SCRIPT_DIR}/calibration/apply_iris_dynamics.py` → `/home/valentin/PX4-Autopilot/Tools/simulation/apply_iris_dynamics.py:ro`
-  - `${SCRIPT_DIR}/calibration/iris_dynamics.json` → `/home/valentin/PX4-Autopilot/Tools/simulation/iris_dynamics.json:ro`
-  The sitl script calls that container path. A missing applier prints a warning and still spawns. It does not skip the color inject.
+- Consumes: host path `calibration/models/iris/iris.sdf.jinja` from Task 4. Does not import it.
+- Produces: both `DOCKER_VOLUMES` lists contain this mount, and no other new iris-model mount:
+
+```text
+--volume="${SCRIPT_DIR}/calibration/models/iris/iris.sdf.jinja:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/iris/iris.sdf.jinja:ro"
+```
+
+`sitl_multiple_run.sh` already feeds `models/${MODEL}/${MODEL}.sdf.jinja` to `jinja_gen.py`, which is that container path when `MODEL=iris`. Do not edit `sitl_multiple_run.sh`. Do not mount the applier or the JSON into the container. Sensor and color inject still edit the generated `/tmp/iris_N.sdf` only. Dynamics are already in the mounted jinja before `jinja_gen.py` runs.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -431,27 +456,29 @@ Expected: PASS
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SITL = (ROOT / "multidrone" / "sitl_multiple_run.sh").read_text()
 RUN = (ROOT / "runSimNoeticMulti.sh").read_text()
+DOCKER = (ROOT / "Dockerfiles" / "PX4NoeticSimNvidia.dockerfile").read_text()
+MOUNT = (
+    '--volume="${SCRIPT_DIR}/calibration/models/iris/iris.sdf.jinja:'
+    "/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/"
+    'sitl_gazebo-classic/models/iris/iris.sdf.jinja:ro"'
+)
 
-def test_sitl_applies_dynamics_after_colors():
-    assert SITL.index("inject_iris_colors.py") < SITL.index("apply_iris_dynamics.py")
-    assert "iris_dynamics.json" in SITL
-
-def test_runsim_mounts_applier_in_both_volume_lists():
-    assert RUN.count("calibration/apply_iris_dynamics.py") == 2
-    assert RUN.count("calibration/iris_dynamics.json") == 2
+def test_runsim_mounts_host_iris_jinja_in_both_volume_lists():
+    assert RUN.count(MOUNT) == 2
+    assert "docker cp" not in RUN
+    assert "iris.sdf.jinja" not in DOCKER
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `python3 -m pytest calibration/tests/test_spawn_hook.py -v`
 
-Expected: FAIL because `apply_iris_dynamics.py` is absent from the scripts
+Expected: FAIL because the host jinja `--volume` line is absent (`count` is 0)
 
-- [ ] **Step 3: Add the mount lines and the sitl call**
+- [ ] **Step 3: Add the same `--volume` line to both `DOCKER_VOLUMES` arrays**
 
-In `sitl_multiple_run.sh`, inside the existing `if [ "$MODEL" = "iris" ]` block, after the color inject succeeds or warns, run the applier when the file exists. Use `APPLY_IRIS_DYNAMICS` and `IRIS_DYNAMICS_JSON` environment overrides with the container paths as defaults.
+Place it next to the existing iris inject mounts. Read-only. Do not add a `COPY` of the jinja to the Dockerfile.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -660,7 +687,7 @@ Expected: PASS
   - `BOUNDS: dict[str, tuple[float, float]]` — `mass_kg` (0.4, 2.0), `ixx` (0.005, 0.08), `iyy` (0.005, 0.08), `izz` (0.01, 0.12), `motor_constant` (1e-6, 2e-5), `moment_constant` (0.01, 0.2), `time_constant_up` (0.005, 0.08), `time_constant_down` (0.005, 0.08), `rotor_drag_coefficient` (0.0, 0.002)
   - `neighbors(center: IrisDynamics) -> list[IrisDynamics]` — for each field, two copies of `center` with that field at `clamp(center * 0.5)` and `clamp(center * 2)`, skipping a value that clamps back to `center`. Other fields stay at `center`. Order is the field order on `IrisDynamics`, low then high.
   - `candidate_count(center: IrisDynamics) -> int` = `1 + len(neighbors(center))` (the center plus the neighbors)
-  - `run_search.py` scores the center and each neighbor on all three logs. For each log it restarts nothing itself: it calls the replay with `--params` set to `controller_parameters` of that log, then `select_best` on the nine RMS numbers. `--write PATH` saves the chosen `IrisDynamics` even when `accepted` is false. Pytest does not start SITL. The SDF is read at spawn, so a new JSON needs a new `runSimNoeticMulti.sh` before the next candidate.
+  - `run_search.py` scores the center and each neighbor on all three logs. For each log it restarts nothing itself: it calls the replay with `--params` set to `controller_parameters` of that log, then `select_best` on the nine RMS numbers. `--write` calls `publish_dynamics` on `calibration/iris_dynamics.json` and `IRIS_MODEL_JINJA`, even when `accepted` is false. Pytest does not start SITL. The mounted jinja is read when the container starts, so the next candidate needs a new `runSimNoeticMulti.sh`. Do not write the in-image jinja.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -693,7 +720,7 @@ Expected: FAIL with import error for `calibration.search`
 
 - [ ] **Step 3: Implement `neighbors` and the live entry**
 
-Clamp with the bounds table. `run_search.py` prints the nine RMS numbers and `accepted`. It does not change the accept thresholds. It does not import Quadcopter_SimCon.
+Clamp with the bounds table. `run_search.py` prints the nine RMS numbers and `accepted`. It does not change the accept thresholds. It does not import Quadcopter_SimCon. `--write` publishes the host jinja through `publish_dynamics` and does not `docker cp`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -761,8 +788,8 @@ Expected: PASS for the whole `calibration/tests` directory
 
 These are not pytest. Run them only once Tasks 1–10 have passed.
 
-1. `./runSimNoeticMulti.sh --num 1 --world empty`
-2. `python3 calibration/run_search.py --write calibration/iris_dynamics.json` against instance 0. Restart the sim when the script says the SDF must be respawned (the JSON is read at spawn).
+1. `./runSimNoeticMulti.sh --num 1 --world empty` — the iris Gazebo builds is the mounted host jinja, not the copy baked in the image.
+2. `python3 calibration/run_search.py --write` against instance 0. It updates `calibration/iris_dynamics.json` and `calibration/models/iris/iris.sdf.jinja`. Restart `runSimNoeticMulti.sh` before the next candidate so the new host file is what the mount shows.
 3. `python3 calibration/run_compare.py` writing `calibration/results/velocity_report.json`.
 
 The proof of calibration is that report: nine iris-versus-log RMS numbers, `accepted`, and the SimCon columns beside them. A SimCon gap stays in the file.

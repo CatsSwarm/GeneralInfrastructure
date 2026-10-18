@@ -15,15 +15,18 @@ from calibration.cascade_sitl import (  # noqa: E402
     _commanded,
     _param_matches,
     _quaternion,
+    _send_gains,
     _stop,
     setpoints,
     sitl_command,
 )
 
 def test_sitl_command_is_headless_one_iris():
+    script = ROOT / "runSimNoeticMulti.sh"
     assert sitl_command(Path("runSimNoeticMulti.sh")) == [
-        "env", "HEADLESS=1", "runSimNoeticMulti.sh", "--num", "1", "--world", "empty"
+        "env", "HEADLESS=1", str(script), "--num", "1", "--world", "empty"
     ]
+    assert script.is_file()
 
 def test_position_nan_is_ignored_not_zero():
     flight = load_flight(ROOT / "calibration" / "log_2_UnknownDate.ulg")
@@ -49,6 +52,37 @@ def _int_bits(value: int) -> float:
     import struct
 
     return struct.unpack("<f", struct.pack("<i", value))[0]
+
+
+def test_absent_parameter_does_not_stop_the_rest(monkeypatch):
+    monkeypatch.setattr("calibration.cascade_sitl._PARAM_TIMEOUT_S", 0.05)
+
+    class _Master:
+        def __init__(self):
+            self.mav = type("Mav", (), {
+                "set_attitude_target_send": staticmethod(lambda *args: None),
+                "set_position_target_local_ned_send": staticmethod(lambda *args: None),
+            })()
+            self.sent: list[str] = []
+            self._pending: list[str] = []
+
+        def param_fetch_one(self, name):
+            if name != "MPC_HOLD_DZ":
+                self._pending.append(name)
+
+        def param_set_send(self, name, value, param_type):
+            self.sent.append(name)
+            self._pending.append(name)
+
+        def recv_match(self, blocking=True, timeout=None, **kwargs):
+            if not self._pending:
+                return None
+            name = self._pending.pop(0)
+            return _ParamMessage(name, 12.0, mavutil.mavlink.MAV_PARAM_TYPE_REAL32)
+
+    master = _Master()
+    _send_gains(master, {"MPC_HOLD_DZ": 0.1, "MC_ROLL_P": 12.0})
+    assert master.sent == ["MC_ROLL_P"]
 
 
 def test_float_echo_matches_only_with_isclose():
@@ -128,4 +162,4 @@ def test_stop_bounds_wait_and_runs_kill(monkeypatch):
     _stop(proc)
     assert proc.waits
     assert all(timeout is not None for timeout in proc.waits)
-    assert any("--kill" in command for command, _kwargs in ran)
+    assert ran[0][0] == [str(ROOT / "runSimNoeticMulti.sh"), "--kill"]

@@ -176,8 +176,31 @@ GAZEBO11_PLUGINS="/usr/lib/x86_64-linux-gnu/gazebo-11/plugins"
 if [ -d "${GAZEBO11_PLUGINS}" ]; then
 	export LD_LIBRARY_PATH="${GAZEBO11_PLUGINS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
-gzserver ${src_path}/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/${gz_world}.world --verbose $ros_args &
-sleep 5
+# Gazebo transport sometimes delivers an empty header during startup and
+# gzserver aborts (std::length_error). A dead server stays a zombie, so
+# kill -0 still looks alive. Retry until the process is actually running.
+gz_server_alive() {
+	local stat
+	stat=$(sed -n 's/.*) //p' /proc/"$1"/stat 2>/dev/null | awk '{print $1}') || return 1
+	[ -n "$stat" ] && [ "$stat" != "Z" ]
+}
+gz_pid=""
+gz_up=0
+for gz_attempt in 1 2 3; do
+	gzserver ${src_path}/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/${gz_world}.world --verbose $ros_args &
+	gz_pid=$!
+	sleep 5
+	if gz_server_alive "$gz_pid"; then
+		gz_up=1
+		break
+	fi
+	wait "$gz_pid" 2>/dev/null || true
+	echo "gzserver aborted on attempt ${gz_attempt}"
+done
+if [ "$gz_up" != 1 ]; then
+	echo "gzserver failed to stay up"
+	exit 1
+fi
 
 # Read positions from file if provided
 declare -a positions_x

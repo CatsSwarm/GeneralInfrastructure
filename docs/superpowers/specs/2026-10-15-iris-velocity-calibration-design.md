@@ -24,6 +24,7 @@ This work fits the Gazebo iris model so that, under the PX4 setup stored in the 
 | SimCon role | Same commands in, velocity out. Compared and reported. The iris is not adjusted to shrink a SimCon gap |
 | SimCon code | `Quadcopter_SimCon` plant and controller stay as they are, including `Simulation/quadFiles/initQuad.py` |
 | Sim stack | Existing Gazebo Classic iris on the Noetic PX4 SITL (`runSimNoeticMulti.sh`, one iris, empty world) |
+| Iris model file | Host file `calibration/models/iris/iris.sdf.jinja`, bind-mounted with docker `--volume` (`-v`) over the in-container `models/iris/iris.sdf.jinja`. Not copied into the image |
 
 The three logs:
 
@@ -35,7 +36,7 @@ Each is about 2.5 minutes of velocity-offboard flight, airborne near 1.3 m. cat3
 
 ## Goals
 
-- A repo-local iris model parameter set that the Noetic SITL applies on spawn.
+- The iris model Gazebo reads is the host file `calibration/models/iris/iris.sdf.jinja`, mounted into the Noetic container with `--volume`. The in-image copy is hidden by that mount.
 - A replay of each log's velocity setpoints on that iris, and a score of iris velocity against the logged velocity.
 - The same setpoint series flown in Quadcopter_SimCon, with iris, SimCon, and log velocities written side by side.
 - A small set of synthetic velocity commands, up to 5 m/s, flown on both the iris and SimCon, velocities written side by side.
@@ -49,6 +50,7 @@ Each is about 2.5 minutes of velocity-offboard flight, airborne near 1.3 m. cat3
 - Noble, Gazebo Jetty, or FlightGear.
 - More than one iris, or a world other than empty.
 - Raising the synthetic command above 5 m/s on `vx` or `vy`.
+- `COPY` or `docker cp` of the iris model into the image. The model enters the container only through `--volume`.
 
 ## Anti-goals
 
@@ -90,7 +92,11 @@ On each replay, SITL boots with that log's initial parameter set. `MPC_THR_HOVER
 
 The numbers that may change are iris mass, inertia, rotor (thrust and torque coefficients, motor time constant), and drag. Geometry stays the stock iris frame. Sensor inject (`inject_iris_sensors.py`, optical flow, lidar) stays as it is.
 
-**Call:** the chosen numbers live in this repo and are applied to the iris SDF the SITL spawns. The copy inside the image is not the only copy. A restart of `runSimNoeticMulti.sh` picks up the calibrated model without an image rebuild.
+The model Gazebo generates from is the host file `calibration/models/iris/iris.sdf.jinja`. Both `DOCKER_VOLUMES` lists in `runSimNoeticMulti.sh` bind-mount it read-only onto:
+
+`/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/iris/iris.sdf.jinja`
+
+`sitl_multiple_run.sh` already passes that container path to `jinja_gen.py`. Meshes stay in the image. The Dockerfile does not `COPY` this file. A search writes the host file; the next `runSimNoeticMulti.sh` start reads it through the mount. No image rebuild.
 
 ## SimCon comparison
 
@@ -101,13 +107,12 @@ Write, per log and per synthetic case: the command, the logged velocity when a l
 ## Left to the builder
 
 - The search method over mass, inertia, rotor, and drag.
-- Which SDF fields carry those four groups, as long as the groups above are the ones that change.
-- How the repo-local numbers are applied at spawn.
+- Which elements inside `iris.sdf.jinja` carry those four groups, as long as the groups above are the ones that change.
 - Whether a synthetic case is one flight or several, as long as each case starts from hover and the commands match the table.
 - The on-disk layout of the numeric report.
 
 ## Test boundary
 
-Unit tests cover the pieces that do not need Gazebo or SimCon running: reading the three logs into timestamped `vx, vy, vz` command and response plus the initial parameter set; the RMS score, including the airborne and finite-sample rules and the refusal to time-shift; the synthetic command generator, including the 5 m/s cap and the case table; and the file that stores the iris numbers the spawner applies.
+Unit tests cover the pieces that do not need Gazebo or SimCon running: reading the three logs into timestamped `vx, vy, vz` command and response plus the initial parameter set; the RMS score, including the airborne and finite-sample rules and the refusal to time-shift; the synthetic command generator, including the 5 m/s cap and the case table; the host `iris.sdf.jinja` those numbers are written into, and the `--volume` lines that mount that file.
 
 The Gazebo replays and the SimCon runs are the calibration. Their proof is the score against the three logs and the side-by-side velocity report, not a unit test that pretends to fly.

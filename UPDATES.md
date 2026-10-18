@@ -2,6 +2,20 @@
 
 This file documents the development progress and changes made to the `CatSwarm/general_infrastructure` project by the AI agent.
 
+## [2026-10-18] Cascade gzserver startup
+- Headless `gzserver` sometimes aborts on an empty Gazebo transport header (`std::length_error`) before the iris spawns, so PX4 never heartbeats. `sitl_multiple_run.sh` retries it up to three times. The cascade waits 90s for the first heartbeat.
+- The cascade writes sim output to `calibration/results/sitl.log`. A stdout pipe on this host is what triggers that abort.
+- Logged gains this PX4 build does not have (`MPC_HOLD_DZ`, `MPC_XY_MAN_EXPO`, `MPC_YAW_EXPO`, `MPC_Z_MAN_EXPO`) are skipped instead of aborting the flight.
+
+
+- Headless `gzserver` sometimes aborts on an empty Gazebo transport header (`std::length_error`) before the iris spawns, so PX4 never heartbeats. `sitl_multiple_run.sh` retries it up to three times. The cascade waits 90s for the first heartbeat.
+
+## [2026-10-18] Cascade sim script path
+- `python3 -m calibration.run_cascade` starts and kills the sim with the absolute `runSimNoeticMulti.sh`. `env` does not search the working directory, so the bare name exited 127.
+
+## [2026-10-18] Cascade folder README
+- `calibration/README.md` describes only the iris cascade: hover thrust, arm lengths, outer gains, the headless replay, and the files that program writes.
+
 ## [2026-10-17] Iris cascade calibration
 - `python3 -m calibration.run_cascade` reads a ULG (default `calibration/log_2_UnknownDate.ulg`) and writes the mounted iris jinja plus `calibration/iris_controller.json`.
 - Order: hover `motorConstant` so command `h` holds 1.5 kg, then one `|x|` and one `|y|` arm, then angle, velocity, and position gains. Rate gains, yaw, mass, and inertia stay put. No numeric pass gate. Closeness is unshifted per-axis RMS.

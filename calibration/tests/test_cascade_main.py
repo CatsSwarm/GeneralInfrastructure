@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from calibration.cascade_flight import AxisLog, CascadeFlight, load_flight  # noqa: E402
 from calibration.cascade_sitl import fly_log, setpoints, sitl_command  # noqa: E402
+from calibration.run_cascade import popen_sim  # noqa: E402
 
 _REAL32 = mavutil.mavlink.MAV_PARAM_TYPE_REAL32
 _INT32 = mavutil.mavlink.MAV_PARAM_TYPE_INT32
@@ -24,6 +25,13 @@ class _Proc:
 class _Master:
     def recv_match(self, **kwargs):
         return None
+
+def test_popen_sim_writes_gazebo_output_to_a_file(tmp_path: Path):
+    log = tmp_path / "sitl.log"
+    proc = popen_sim([sys.executable, "-c", "print('gazebo-banner')"], log)
+    proc.wait(timeout=10)
+    assert log.read_text(encoding="utf-8") == "gazebo-banner\n"
+
 
 def test_fly_log_uses_headless_instance_one(tmp_path: Path, monkeypatch):
     monkeypatch.setattr("calibration.cascade_sitl.subprocess.run", lambda *args, **kwargs: None)

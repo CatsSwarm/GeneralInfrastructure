@@ -1,0 +1,201 @@
+{
+  "accepted": false,
+  "dynamics": {
+    "ixx": 0.029125,
+    "iyy": 0.029125,
+    "izz": 0.055225,
+    "mass_kg": 1.5,
+    "moment_constant": 0.06,
+    "motor_constant": 2.92e-06,
+    "rotor_drag_coefficient": 0.000175,
+    "time_constant_down": 0.025,
+    "time_constant_up": 0.0125
+  },
+  "logs": [
+    {
+      "iris_rms": {
+        "vx": 0.6110359531678143,
+        "vy": 0.07991566960267617,
+        "vz": 0.07525107011166957
+      },
+      "name": "Group3RLcat2_log_41_2026-8-25-17-05-30",
+      "simcon_rms": {
+        "vx": 0.06985013404582269,
+        "vy": 0.04123738940117483,
+        "vz": 0.05570640621115624
+      }
+    },
+    {
+      "iris_rms": {
+        "vx": 0.662803137287803,
+        "vy": 0.2753354814458132,
+        "vz": 0.1004204503781405
+      },
+      "name": "Group3RLcat3_log_18_2026-8-25-17-05-26",
+      "simcon_rms": {
+        "vx": 0.07211335118664346,
+        "vy": 0.05063036670299711,
+        "vz": 0.04688662005339776
+      }
+    },
+    {
+      "iris_rms": {
+        "vx": 0.6442641103057902,
+        "vy": 0.2260626639036751,
+        "vz": 0.09806677806099316
+      },
+      "name": "Group3RLcat4_log_28_2026-8-25-17-05-24",
+      "simcon_rms": {
+        "vx": 0.08009837251793696,
+        "vy": 0.06100824336533018,
+        "vz": 0.05533574105781686
+      }
+    }
+  ],
+  "synthetic": [
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "step_vx_p1"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "step_vx_m1"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "step_vx_p3"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "step_vx_m3"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "step_vx_p5"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "step_vx_m5"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "step_vy_p1"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "step_vy_m1"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "step_vy_p3"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "step_vy_m3"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "step_vy_p5"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "step_vy_m5"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "sine_vx_0.2hz"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "sine_vx_1.0hz"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "sine_vy_0.2hz"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "sine_vy_1.0hz"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "chirp_vx"
+    },
+    {
+      "iris_vs_simcon_rms": {
+        "vx": null,
+        "vy": null,
+        "vz": null
+      },
+      "name": "chirp_vy"
+    }
+  ]
+}

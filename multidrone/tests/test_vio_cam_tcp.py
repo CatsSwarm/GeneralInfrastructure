@@ -155,6 +155,13 @@ def test_serve_frames_probe_then_second_client_receives_svof():
     assert srv_closed == [1]
 
 
+def test_sitl_restarts_gzserver_when_it_aborts():
+    text = (ROOT / "sitl_multiple_run.sh").read_text()
+    window = text[text.index('echo "Starting gazebo"') : text.index("Reading positions from")]
+    assert "gzserver aborted on attempt" in window
+    assert "gzserver failed to stay up" in window
+
+
 def test_sitl_ros1_starts_roscore_and_gazebo_api_plugin():
     text = (ROOT / "sitl_multiple_run.sh").read_text()
     assert "libgazebo_ros_api_plugin.so" in text

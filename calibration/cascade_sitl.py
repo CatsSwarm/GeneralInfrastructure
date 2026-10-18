@@ -6,6 +6,7 @@ import json
 import math
 import struct
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,8 +25,19 @@ class Setpoint:
     ignore: frozenset[str]
 
 
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _script_path(script: Path) -> Path:
+    """Absolute path. ``env`` and ``subprocess`` do not search the working directory."""
+    path = Path(script)
+    if not path.is_absolute():
+        path = _REPO_ROOT / path
+    return path
+
+
 def sitl_command(script: Path) -> list[str]:
-    return ["env", "HEADLESS=1", str(script), "--num", "1", "--world", "empty"]
+    return ["env", "HEADLESS=1", str(_script_path(script)), "--num", "1", "--world", "empty"]
 
 
 def _nearest_command(source: AxisLog, query_t: np.ndarray) -> np.ndarray:
@@ -181,7 +193,8 @@ _NED_FRAME = mavutil.mavlink.MAV_FRAME_LOCAL_NED
 _MODE_PERIOD_S = 0.5
 _FORCE_ARM_AFTER_S = 5.0
 _PX4_FORCE_ARM = 21196.0
-_HEARTBEAT_TIMEOUT_S = 30.0
+# Docker boot plus up to two gzserver restarts (5s each) before PX4 mavlink.
+_HEARTBEAT_TIMEOUT_S = 90.0
 _STREAM_HZ = 50.0
 _PARAM_TIMEOUT_S = 2.0
 _ACK_TIMEOUT_S = 60.0
@@ -266,7 +279,7 @@ def _end_process(proc) -> None:
 def _kill_sim() -> None:
     try:
         subprocess.run(
-            [str(Path("runSimNoeticMulti.sh")), "--kill"],
+            [str(_script_path(Path("runSimNoeticMulti.sh"))), "--kill"],
             check=False,
             timeout=_SIM_KILL_TIMEOUT_S,
         )
@@ -326,7 +339,11 @@ def _send_gains(master, gains: dict[str, float]) -> None:
         return
     for name, value in gains.items():
         master.param_fetch_one(name)
-        current = _wait_param(master, name, _PARAM_TIMEOUT_S)
+        try:
+            current = _wait_param(master, name, _PARAM_TIMEOUT_S)
+        except TimeoutError:
+            print(f"skip {name}: firmware has no such parameter", file=sys.stderr)
+            continue
         wired, param_type = _wire_param(float(value), int(current.param_type))
         master.param_set_send(name, wired, param_type)
         echo = _wait_param(master, name, _PARAM_TIMEOUT_S)

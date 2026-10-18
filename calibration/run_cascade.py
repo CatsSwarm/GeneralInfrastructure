@@ -101,6 +101,29 @@ _DEFAULT_ULG = Path("calibration/log_2_UnknownDate.ulg")
 _DEFAULT_MODEL = Path("calibration/models/iris/iris.sdf.jinja")
 _DEFAULT_GAINS = Path("calibration/iris_controller.json")
 _DEFAULT_REPORT = Path("calibration/results/cascade_report.json")
+_DEFAULT_SITL_LOG = Path("calibration/results/sitl.log")
+
+
+def popen_sim(command: list[str], log_path: Path) -> subprocess.Popen:
+    """Start the sim with stdout on a file.
+
+    A pipe on this host makes ``gzserver`` abort during Gazebo transport
+    startup (empty header, then ``std::length_error``).
+    """
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log = log_path.open("w", encoding="utf-8", errors="replace")
+    proc = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
+    original_wait = proc.wait
+
+    def wait(timeout=None):
+        try:
+            return original_wait(timeout)
+        finally:
+            if proc.poll() is not None and not log.closed:
+                log.close()
+
+    proc.wait = wait  # type: ignore[method-assign]
+    return proc
 
 
 def _connect(port: str):
@@ -121,7 +144,11 @@ def main(argv: list[str] | None = None) -> int:
         ulg,
         _DEFAULT_MODEL,
         _DEFAULT_GAINS,
-        partial(fly_log, runner=subprocess.Popen, connect=_connect),
+        partial(
+            fly_log,
+            runner=partial(popen_sim, log_path=_DEFAULT_SITL_LOG),
+            connect=_connect,
+        ),
         _DEFAULT_REPORT,
     )
     return 0

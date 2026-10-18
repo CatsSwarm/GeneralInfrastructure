@@ -1,0 +1,11 @@
+{
+  "mass_kg": 1.5,
+  "ixx": 0.029125,
+  "iyy": 0.029125,
+  "izz": 0.055225,
+  "motor_constant": 2.92e-06,
+  "moment_constant": 0.06,
+  "time_constant_up": 0.0125,
+  "time_constant_down": 0.025,
+  "rotor_drag_coefficient": 0.000175
+}
