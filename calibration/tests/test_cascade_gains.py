@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 from calibration.cascade_gains import (  # noqa: E402
     ANGLE_KEYS,
+    RATE_P_KEYS,
     gain_file,
     save_gains,
     search_keys,
@@ -15,7 +16,7 @@ from calibration.cascade_gains import (  # noqa: E402
 
 
 def test_search_keys_and_hover_restore_and_yaw_refusal():
-    assert search_keys("rate") == ()
+    assert search_keys("rate") == RATE_P_KEYS
     assert search_keys("angle") == ANGLE_KEYS
     initial = {
         "MC_ROLLRATE_P": 0.08,
@@ -36,6 +37,25 @@ def test_search_keys_and_hover_restore_and_yaw_refusal():
         gain_file(initial, {"MC_YAW_P": 4.0})
     with pytest.raises(ValueError):
         gain_file(initial, {"MPC_THR_HOVER": 0.4})
+
+
+def test_rate_p_override_is_accepted_and_rate_i_is_refused():
+    initial = {
+        "MC_ROLLRATE_P": 0.08,
+        "MC_ROLLRATE_I": 0.2,
+        "MC_PITCHRATE_P": 0.08,
+        "MC_PITCHRATE_I": 0.2,
+        "MC_ROLL_P": 12.0,
+    }
+    gained = gain_file(initial, {"MC_ROLLRATE_P": 0.05, "MC_PITCHRATE_P": 0.06})
+    assert gained["MC_ROLLRATE_P"] == pytest.approx(0.05)
+    assert gained["MC_PITCHRATE_P"] == pytest.approx(0.06)
+    assert gained["MC_ROLLRATE_I"] == pytest.approx(0.2)
+    assert gained["MPC_THR_HOVER"] == pytest.approx(0.5)
+    with pytest.raises(ValueError):
+        gain_file(initial, {"MC_ROLLRATE_I": 0.1})
+    with pytest.raises(ValueError):
+        gain_file(initial, {"MC_ROLLRATE_D": 0.01})
 
 
 def test_save_gains_roundtrip(tmp_path: Path):

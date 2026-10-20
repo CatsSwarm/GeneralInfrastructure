@@ -1,100 +1,28 @@
-"""Cascade order: hover thrust, motor arms, then angle, velocity, and position."""
+"""``run_cascade`` prints the four tune programs. It does not fly or search."""
 
 from __future__ import annotations
 
-import json
 import subprocess
 import sys
-from functools import partial
 from pathlib import Path
 
-from calibration.cascade_flight import load_flight
-from calibration.cascade_sitl import fly_log
-from calibration.cascade_gains import gain_file, save_gains, search_keys
-from calibration.cascade_hover import hover_command
-from calibration.cascade_model import read_arms, write_model
-from calibration.cascade_score import axis_rms, rms_sum
-from calibration.cascade_search import search_knobs
-from calibration.cascade_thrust import motor_constant
+_ROOT = Path(__file__).resolve().parents[1]
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
-_AXES: dict[str, tuple[str, ...]] = {
-    "rate": ("roll_rate", "pitch_rate"),
-    "angle": ("roll", "pitch"),
-    "velocity": ("vx", "vy", "vz"),
-    "position": ("x", "y", "z"),
-}
-_EMPTY_AXIS = "no airborne samples with a finite command"
+_TUNE_COMMANDS = (
+    "python3 -m calibration.tune_rate",
+    "python3 -m calibration.tune_angle",
+    "python3 -m calibration.tune_velocity",
+    "python3 -m calibration.tune_position",
+)
 
 
-def _closeness(step: str, flight, series: dict) -> float:
-    """Sum per-axis RMS. Drop an axis whose command is never finite."""
-    values: list[float] = []
-    empty: ValueError | None = None
-    for name in _AXES[step]:
-        axis = getattr(flight, name)
-        t_sim, sim = series[name]
-        try:
-            values.append(
-                axis_rms(
-                    axis.t_s,
-                    axis.command,
-                    axis.response,
-                    axis.airborne,
-                    t_sim,
-                    sim,
-                )
-            )
-        except ValueError as exc:
-            if str(exc) != _EMPTY_AXIS:
-                raise
-            empty = exc
-    if not values:
-        if empty is None:
-            raise ValueError(_EMPTY_AXIS)
-        raise empty
-    return rms_sum(values)
-
-
-def run_cascade(
-    ulg: Path,
-    model: Path,
-    gains_path: Path,
-    fly,
-    report_path: Path,
-) -> dict[str, float]:
-    """Write hover thrust, search arms, then outer gains. Return each step's RMS."""
-    flight = load_flight(ulg)
-    constant = motor_constant(hover_command(ulg))
-    arm_x, arm_y = read_arms(model)
-    write_model(model, constant, arm_x, arm_y)
-    initial = flight.initial_parameters
-    save_gains(gains_path, gain_file(initial))
-
-    def evaluate_arms(knobs: dict[str, float]) -> float:
-        write_model(model, constant, knobs["arm_x"], knobs["arm_y"])
-        return _closeness("rate", flight, fly("rate", flight, model, gains_path))
-
-    arms, rate_score = search_knobs({"arm_x": arm_x, "arm_y": arm_y}, evaluate_arms)
-    write_model(model, constant, arms["arm_x"], arms["arm_y"])
-
-    accepted: dict[str, float] = {}
-    scores = {"rate": rate_score}
-
-    def evaluate_gains(step: str, knobs: dict[str, float]) -> float:
-        save_gains(gains_path, gain_file(initial, {**accepted, **knobs}))
-        return _closeness(step, flight, fly(step, flight, model, gains_path))
-
-    for step in ("angle", "velocity", "position"):
-        start = {key: initial[key] for key in search_keys(step)}
-        best, score = search_knobs(
-            start, lambda knobs, step=step: evaluate_gains(step, knobs)
-        )
-        accepted.update(best)
-        save_gains(gains_path, gain_file(initial, accepted))
-        scores[step] = score
-
-    report_path.write_text(json.dumps(scores, indent=2) + "\n", encoding="utf-8")
-    return scores
+def run_cascade(*_args, **_kwargs) -> int:
+    """Print the four tune programs and return 2. Does not fly or search."""
+    for command in _TUNE_COMMANDS:
+        print(command, file=sys.stderr)
+    return 2
 
 
 _DEFAULT_ULG = Path("calibration/log_2_UnknownDate.ulg")
@@ -102,6 +30,16 @@ _DEFAULT_MODEL = Path("calibration/models/iris/iris.sdf.jinja")
 _DEFAULT_GAINS = Path("calibration/iris_controller.json")
 _DEFAULT_REPORT = Path("calibration/results/cascade_report.json")
 _DEFAULT_SITL_LOG = Path("calibration/results/sitl.log")
+# Set True to open the Gazebo window. False keeps the sim headless.
+SHOW_GAZEBO = True
+
+
+def _repo_path(path: Path) -> Path:
+    """Relative cascade paths are from the repo root, not the process cwd."""
+    path = Path(path)
+    if path.is_absolute():
+        return path
+    return _ROOT / path
 
 
 def popen_sim(command: list[str], log_path: Path) -> subprocess.Popen:
@@ -134,24 +72,12 @@ def _connect(port: str):
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Calibrate the mounted iris. No arguments uses the cascade log and gain file."""
+    """Print the four tune programs. This entry does not fly."""
     args = list(sys.argv[1:] if argv is None else argv)
     if len(args) > 1:
         print("usage: python3 -m calibration.run_cascade [ULG]", file=sys.stderr)
         return 2
-    ulg = Path(args[0]) if args else _DEFAULT_ULG
-    run_cascade(
-        ulg,
-        _DEFAULT_MODEL,
-        _DEFAULT_GAINS,
-        partial(
-            fly_log,
-            runner=partial(popen_sim, log_path=_DEFAULT_SITL_LOG),
-            connect=_connect,
-        ),
-        _DEFAULT_REPORT,
-    )
-    return 0
+    return run_cascade()
 
 
 if __name__ == "__main__":

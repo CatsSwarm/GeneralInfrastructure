@@ -2,13 +2,81 @@
 
 This file documents the development progress and changes made to the `CatSwarm/general_infrastructure` project by the AI agent.
 
+## 2.0.1 - 2026-10-20 Cascade stages keep their own logs
+- Each tune stage writes `parameter_history.jsonl` and `logs/trial_NNN.ulg` under `calibration/results/cascade/stages/<step>/`. A new run of that step starts the history file clean. A later step does not replace an earlier step's winning log.
+- `run_cascade()` prints the four `python3 -m calibration.tune_*` commands and returns 2. It does not fly or search. `popen_sim`, `_connect`, `_repo_path`, and `SHOW_GAZEBO` stay in that module for the tune programs.
+
+## 2.0.0 - 2026-10-19 Cascade loops are separate programs
+- Cascade calibration is four commands: `python3 -m calibration.tune_rate`, `tune_angle`, `tune_velocity`, and `tune_position`.
+- `tune_rate` freezes rotor x/y, prop radius, and `maxRotVelocity`, fits hover `motorConstant`, then searches `timeConstantUp` and `MC_ROLLRATE_P` / `MC_PITCHRATE_P`.
+- Each later command refuses to fly until `calibration/results/cascade/stages/<previous>/best.json` exists. Angle, velocity, and position scores include roll-rate and pitch-rate RMS.
+- Factors are `0.7`, `0.85`, `1.15`, and `1.3`, once per knob. A knob is kept only when the RMS sum strictly falls.
+- `python3 -m calibration.run_cascade` prints those four commands and returns 2. It no longer flies. This is a breaking change.
+
+## [2026-10-20] Cascade SITL waits out container removal
+- `fly_log` polls `docker ps -a` until `px4-noetic-sim-ros` is gone before it starts the sim. If that name is still listed after 30 s, it raises and does not start.
+- A missing heartbeat on `udpin:0.0.0.0:14541` is tried three times. Each failed try stops the sim and waits for the container to disappear. Other timeouts are not retried. The velocity search is unchanged.
+
+## [2026-10-20] Cascade velocity program is its own command
+- `python3 -m calibration.tune_velocity` returns 2 and prints `angle has not converged; run python3 -m calibration.tune_angle` when `stages/angle/best.json` is missing or its `step` is not `angle`. It does not fly.
+- With that file it searches only the six `MPC_*_VEL_*_ACC` gains. The score includes roll rate, pitch rate, vx, vy, and vz. A gain that improves velocity and worsens rate is rejected. Kept gains are written back after the search, then `stages/velocity/best.json`. Rate P and angle P come from the gain file when it exists, otherwise from the angle stage parameters.
+
+## [2026-10-20] Angle search keeps the restored rate P
+- `tune_angle` no longer copies logged `MC_ROLLRATE_P` and `MC_PITCHRATE_P` over the rate loop. Those two values come from the gain file when it exists, otherwise from `stages/rate/best.json` parameters when the keys are present. Trials and the final restore override only `MC_ROLL_P` and `MC_PITCH_P`.
+
+## [2026-10-20] Cascade angle program is its own command
+- `python3 -m calibration.tune_angle` returns 2 and prints `rate has not converged; run python3 -m calibration.tune_rate` when `stages/rate/best.json` is missing or its `step` is not `rate`. It does not fly.
+- With that file it searches only `MC_ROLL_P` and `MC_PITCH_P`. The score includes roll rate, pitch rate, roll, and pitch. A gain that improves angle and worsens rate is rejected. Kept gains are written back after the search, then `stages/angle/best.json`. The motor plant and rate P stay as the rate loop left them.
+
+## [2026-10-19] Cascade stage save can be repeated
+- `Session.save_stage` overwrites `stages/<step>/best.json` and `comparison.html` when that step was already saved. An empty step still raises `ValueError` and creates no directory.
+
+## [2026-10-19] Cascade rate program is its own command
+- `python3 -m calibration.tune_rate` freezes rotor x/y, prop radius, and `maxRotVelocity`, writes hover `motorConstant` at that radius, then searches `timeConstantUp` (`timeConstantDown` keeps the original ratio) and `MC_ROLLRATE_P` / `MC_PITCHRATE_P`. The lowest rate score is rewritten to the model and the gain file. `calibration/results/cascade/stages/rate/best.json` is that trial.
+- `python3 -m calibration.run_cascade` prints `python3 -m calibration.tune_rate`, `tune_angle`, `tune_velocity`, and `tune_position` and returns 2. It does not fly.
+
+## [2026-10-19] Cascade keeps every flight and searches the motor plant
+- Click a point on the RMS plot in `comparison.html` to show that flight's traces. Each flight's PX4 log is copied to `logs/trial_NNN.ulg` before the container is removed.
+- The rate step also searches motor `timeConstantUp` (down keeps the same ratio), propeller radius, and `maxRotVelocity`. Radius scales `motorConstant` with the fourth power so the thrust changes with prop size. The plugin has no separate maximum-power field; the speed cap is what limits power.
+
+## [2026-10-19] Cascade flight is 30 s
+- The scored slice is log time 50 s through 80 s. Hover fit, replay, and RMS use that 30 s.
+
+## [2026-10-19] Cascade comparison shows the full state
+- `comparison.html` always plots roll, pitch, and yaw rate, roll, pitch, and yaw angle, velocity X/Y/Z, and position X/Y/Z, plus the RMS panel. The sim records yaw and yaw rate from the attitude stream. The log yaw trace is the measured heading.
+
+## [2026-10-19] Cascade comparison legends sit on each plot
+- `comparison.html` gives the RMS panel and each response panel its own legend in that panel's top-right corner.
+
+## [2026-10-19] Cascade comparison is a Plotly page
+- Each trial rewrites `comparison.html` instead of `comparison.png`. Open that file in a browser to zoom, pan, and hover the RMS curve and the log-versus-sim traces. Samples are not downsampled.
+
+## [2026-10-19] Cascade default paths ignore the debugger cwd
+- The `run_cascade` debug launch uses `calibration/` as its working directory, so `calibration/log_2_UnknownDate.ulg` was missing. Default log, model, gains, report, and session paths now resolve from the repo root.
+
+## [2026-10-19] Cascade uses log time 50–150 s
+- Hover fit, setpoint replay, and the RMS score use only `log_2_UnknownDate.ulg` from 50 s through 150 s. The scored flight is 100 s after the climb to 10 m. Controller parameters still come from the log's initial set.
+
+## [2026-10-18] Cascade holds the climb altitude
+- After the 10 m climb, replay thrust is no longer the log collective. Hover thrust only balances the weight while the rotors are vertical, and the log's body rates tilt them, so the iris was descending onto the ground. Thrust now follows the height and downward speed back to 10 m. Velocity and position steps command `z = -10` and a `vz` toward that height.
+
+## [2026-10-18] Cascade climb before the scored replay
+- The iris motor plugin applies `motorConstant * ω²` along each rotor link +Z (up when level). `ω` is the commanded rad/s; `rotorVelocitySlowdownSim` only slows the visual joint. The fitted hover command holds the weight, so PX4 throttle 0.5 is about 1.8× weight on that map.
+- The replay no longer holds the log's first body-rate sample on the ground (that sample is a pitch rate with takeoff thrust). It climbs level to 10 m first, and scored samples start only then. During the replay, collective thrust is at least the fitted hover command.
+
 ## [2026-10-18] Cascade gzserver startup
 - Headless `gzserver` sometimes aborts on an empty Gazebo transport header (`std::length_error`) before the iris spawns, so PX4 never heartbeats. `sitl_multiple_run.sh` retries it up to three times. The cascade waits 90s for the first heartbeat.
 - The cascade writes sim output to `calibration/results/sitl.log`. A stdout pipe on this host is what triggers that abort.
 - Logged gains this PX4 build does not have (`MPC_HOLD_DZ`, `MPC_XY_MAN_EXPO`, `MPC_YAW_EXPO`, `MPC_Z_MAN_EXPO`) are skipped instead of aborting the flight.
 
+## [2026-10-18] Cascade Gazebo window switch
+- `SHOW_GAZEBO` in `calibration/run_cascade.py` defaults to `False`. `True` sets `HEADLESS=0` so `gzclient` opens on the host display. Docker `-it` is used only when the script's stdin is a terminal.
 
-- Headless `gzserver` sometimes aborts on an empty Gazebo transport header (`std::length_error`) before the iris spawns, so PX4 never heartbeats. `sitl_multiple_run.sh` retries it up to three times. The cascade waits 90s for the first heartbeat.
+## [2026-10-18] Cascade file launch
+- Running `calibration/run_cascade.py` directly (the debugger does this) puts the repo root on `sys.path`, so `import calibration` works when the working directory is not the repo.
+
+## [2026-10-18] Cascade session log and comparison plot
+- Each `python3 -m calibration.run_cascade` opens `calibration/results/sessions/<UTC>_<ulg>/`. `parameter_history.jsonl` gets one line per trial with the ULG path and the parameter set flown. `state.json` is the current step, trial, best RMS, and latest parameters. `comparison.png` is rewritten every trial: RMS by trial, and the ULG response against the current sim. `latest.txt` points at that folder.
 
 ## [2026-10-18] Cascade sim script path
 - `python3 -m calibration.run_cascade` starts and kills the sim with the absolute `runSimNoeticMulti.sh`. `env` does not search the working directory, so the bare name exited 127.

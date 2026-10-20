@@ -54,6 +54,9 @@ def test_fly_log_uses_headless_instance_one(tmp_path: Path, monkeypatch):
     fly_log("rate", flight, model, gains, runner=runner, connect=connect)
     assert commands == [sitl_command(Path("runSimNoeticMulti.sh"))]
     assert ports == ["udpin:0.0.0.0:14541"]
+    commands.clear()
+    fly_log("rate", flight, model, gains, runner=runner, connect=connect, show_gazebo=True)
+    assert commands == [sitl_command(Path("runSimNoeticMulti.sh"), show_gazebo=True)]
 
 
 def _int_bits(value: int) -> float:
@@ -74,6 +77,7 @@ def _rate_flight(times, roll_rate, pitch_rate):
         {},
         _axis(times, roll_rate),
         _axis(times, pitch_rate),
+        empty,
         empty,
         empty,
         empty,
@@ -201,7 +205,7 @@ class _LiveMaster:
                 result=mavutil.mavlink.MAV_RESULT_ACCEPTED,
             )
         if self._phase == "heartbeat":
-            self._phase = "sample"
+            self._phase = "altitude"
             self.armed_at = time.monotonic()
             base = (
                 mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
@@ -209,6 +213,9 @@ class _LiveMaster:
             )
             custom = mavutil.PX4_CUSTOM_MAIN_MODE_OFFBOARD << 16
             return _Message("HEARTBEAT", base_mode=base, custom_mode=custom, src_system=1)
+        if self._phase == "altitude":
+            self._phase = "sample"
+            return _Message("LOCAL_POSITION_NED", x=0.0, y=0.0, z=-10.0, vx=0.0, vy=0.0, vz=0.0)
         if self._phase == "sample":
             self._phase = "drop"
             return _Message("ATTITUDE", roll=0.42, pitch=0.0, rollspeed=0.1, pitchspeed=-0.2)

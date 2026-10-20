@@ -21,6 +21,7 @@ _MOTOR_PLUGIN_RE = re.compile(
     re.DOTALL,
 )
 _MOTOR_CONSTANT_RE = re.compile(r"<motorConstant>[^<]*</motorConstant>")
+_RADIUS_RE = re.compile(r"(<radius>)[^<]*(</radius>)")
 
 
 def _format(value: float) -> str:
@@ -63,10 +64,50 @@ def read_arms(model_path: Path) -> tuple[float, float]:
     return arm_x, sum(arm_y) / len(arm_y)
 
 
+def _tag_value(text: str, tag: str) -> float:
+    match = re.search(rf"<{tag}>([^<]*)</{tag}>", text)
+    if match is None:
+        raise ValueError(f"missing {tag}")
+    return float(match.group(1))
+
+
+def _replace_tag(text: str, tag: str, value: float) -> str:
+    pattern = re.compile(rf"(<{tag}>)[^<]*(</{tag}>)")
+    replaced, count = pattern.subn(rf"\g<1>{_format(value)}\g<2>", text)
+    if count == 0:
+        raise ValueError(f"missing {tag}")
+    return replaced
+
+
+def read_plant(model_path: Path) -> dict[str, float]:
+    """Motor time constants, prop radius, and maximum rotor speed from the iris jinja."""
+    text = model_path.read_text(encoding="utf-8")
+    radius = re.search(
+        r"<cylinder>\s*<length>[^<]*</length>\s*<radius>([^<]*)</radius>",
+        text,
+    )
+    if radius is None:
+        raise ValueError("missing propeller radius")
+    return {
+        "time_constant_up": _tag_value(text, "timeConstantUp"),
+        "time_constant_down": _tag_value(text, "timeConstantDown"),
+        "prop_radius": float(radius.group(1)),
+        "max_rot_velocity": _tag_value(text, "maxRotVelocity"),
+    }
+
+
 def write_model(
-    model_path: Path, motor_constant: float, arm_x: float, arm_y: float
+    model_path: Path,
+    motor_constant: float,
+    arm_x: float,
+    arm_y: float,
+    *,
+    time_constant_up: float | None = None,
+    time_constant_down: float | None = None,
+    prop_radius: float | None = None,
+    max_rot_velocity: float | None = None,
 ) -> None:
-    """Set every motor-model motorConstant and each rotor link pose."""
+    """Set motorConstant, rotor poses, and any motor plant fields that are given."""
     text = model_path.read_text(encoding="utf-8")
     signs = {name: (sign_x, sign_y) for name, sign_x, sign_y in ROTOR_SIGNS}
     _rotor_links(text)
@@ -83,7 +124,25 @@ def write_model(
             raise ValueError(f"{name} link has no pose")
         return _splice_body(match, body)
 
+    def replace_radius(match: re.Match[str]) -> str:
+        if prop_radius is None:
+            return match.group(0)
+        body, count = _RADIUS_RE.subn(
+            rf"\g<1>{_format(prop_radius)}\g<2>", match.group(2)
+        )
+        if count == 0:
+            raise ValueError(f"{match.group(1)} link has no propeller radius")
+        return _splice_body(match, body)
+
     text = _LINK_RE.sub(replace_link, text)
+    if prop_radius is not None:
+        text = _LINK_RE.sub(replace_radius, text)
+    if time_constant_up is not None:
+        text = _replace_tag(text, "timeConstantUp", time_constant_up)
+    if time_constant_down is not None:
+        text = _replace_tag(text, "timeConstantDown", time_constant_down)
+    if max_rot_velocity is not None:
+        text = _replace_tag(text, "maxRotVelocity", max_rot_velocity)
     constant = f"<motorConstant>{_format(motor_constant)}</motorConstant>"
     text = _MOTOR_PLUGIN_RE.sub(
         lambda match: _MOTOR_CONSTANT_RE.sub(constant, match.group(0)),

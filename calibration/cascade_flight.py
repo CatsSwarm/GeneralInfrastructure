@@ -11,6 +11,24 @@ from pyulog import ULog
 from calibration.cascade_hover import hover_command
 
 _US_TO_S = 1e-6
+# Scored replay and the hover fit use this slice of the log clock, inclusive.
+WINDOW_START_S = 50.0
+WINDOW_END_S = 80.0
+_AXIS_NAMES = (
+    "roll_rate",
+    "pitch_rate",
+    "yaw_rate",
+    "roll",
+    "pitch",
+    "yaw",
+    "vx",
+    "vy",
+    "vz",
+    "x",
+    "y",
+    "z",
+    "thrust_z",
+)
 
 
 @dataclass(frozen=True)
@@ -28,6 +46,7 @@ class CascadeFlight:
     initial_parameters: dict[str, float]
     roll_rate: AxisLog
     pitch_rate: AxisLog
+    yaw_rate: AxisLog
     roll: AxisLog
     pitch: AxisLog
     yaw: AxisLog
@@ -91,12 +110,45 @@ def _axis(
     return AxisLog(t_s, command_values, response_values, airborne)
 
 
-def _roll_pitch_series(attitude) -> tuple[np.ndarray, np.ndarray]:
-    return _roll_pitch(
-        np.asarray(attitude["q[0]"], dtype=np.float64),
-        np.asarray(attitude["q[1]"], dtype=np.float64),
-        np.asarray(attitude["q[2]"], dtype=np.float64),
-        np.asarray(attitude["q[3]"], dtype=np.float64),
+def _yaw(w, x, y, z):
+    return np.arctan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+
+def _attitude_series(attitude) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    w = np.asarray(attitude["q[0]"], dtype=np.float64)
+    x = np.asarray(attitude["q[1]"], dtype=np.float64)
+    y = np.asarray(attitude["q[2]"], dtype=np.float64)
+    z = np.asarray(attitude["q[3]"], dtype=np.float64)
+    roll, pitch = _roll_pitch(w, x, y, z)
+    return roll, pitch, _yaw(w, x, y, z)
+
+
+def _clip_axis(axis: AxisLog, t_start_s: float, t_end_s: float) -> AxisLog:
+    chosen = [
+        (t_s, command, response, airborne)
+        for t_s, command, response, airborne in zip(
+            axis.t_s, axis.command, axis.response, axis.airborne, strict=True
+        )
+        if t_start_s <= t_s <= t_end_s
+    ]
+    if not chosen:
+        raise ValueError(f"no samples in {t_start_s:.0f}..{t_end_s:.0f} s")
+    times, commands, responses, airborne = zip(*chosen, strict=True)
+    return AxisLog(times, commands, responses, airborne)
+
+
+def window_flight(flight: CascadeFlight, t_start_s: float, t_end_s: float) -> CascadeFlight:
+    """Keep samples on the closed interval ``[t_start_s, t_end_s]`` and refit hover there."""
+    if t_end_s <= t_start_s:
+        raise ValueError(f"window {t_start_s}..{t_end_s} is empty")
+    clipped = {
+        name: _clip_axis(getattr(flight, name), t_start_s, t_end_s) for name in _AXIS_NAMES
+    }
+    return CascadeFlight(
+        path=flight.path,
+        hover_command=hover_command(Path(flight.path), t_start_s, t_end_s),
+        initial_parameters=dict(flight.initial_parameters),
+        **clipped,
     )
 
 
@@ -127,7 +179,7 @@ def load_flight(path: Path) -> CascadeFlight:
     angle_air = _airborne(landed_t, detected["landed"], angle_t)
     position_air = _airborne(landed_t, detected["landed"], position_t)
     thrust = _floats(_nearest_command(rates_t, rates["thrust_body[2]"], rate_t))
-    roll_response, pitch_response = _roll_pitch_series(attitude)
+    roll_response, pitch_response, yaw_response = _attitude_series(attitude)
     yaw_command = _nearest_command(
         attitude_setpoint_t, attitude_setpoint["yaw_body"], angle_t
     )
@@ -153,6 +205,12 @@ def load_flight(path: Path) -> CascadeFlight:
             angular["xyz[1]"],
             rate_air,
         ),
+        yaw_rate=_axis(
+            rate_s,
+            _nearest_command(rates_t, rates["yaw"], rate_t),
+            angular["xyz[2]"],
+            rate_air,
+        ),
         roll=_axis(
             angle_s,
             _nearest_command(attitude_setpoint_t, attitude_setpoint["roll_body"], angle_t),
@@ -165,7 +223,7 @@ def load_flight(path: Path) -> CascadeFlight:
             pitch_response,
             angle_air,
         ),
-        yaw=_axis(angle_s, yaw_command, yaw_command, angle_air),
+        yaw=_axis(angle_s, yaw_command, yaw_response, angle_air),
         vx=_axis(position_s, position_command("vx"), position["vx"], position_air),
         vy=_axis(position_s, position_command("vy"), position["vy"], position_air),
         vz=_axis(position_s, position_command("vz"), position["vz"], position_air),

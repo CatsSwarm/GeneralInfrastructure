@@ -1,9 +1,10 @@
-"""Logged MC_/MPC_ gains, frozen rate keys, and search-knob refusals."""
+"""Logged MC_/MPC_ gains, searchable rate P, and search-knob refusals."""
 
 import json
 import re
 from pathlib import Path
 
+RATE_P_KEYS: tuple[str, ...] = ("MC_ROLLRATE_P", "MC_PITCHRATE_P")
 RATE_KEYS: tuple[str, ...] = (
     "MC_ROLLRATE_P",
     "MC_ROLLRATE_I",
@@ -27,12 +28,12 @@ VELOCITY_KEYS: tuple[str, ...] = (
 )
 POSITION_KEYS: tuple[str, ...] = ("MPC_XY_P", "MPC_Z_P")
 
-_SEARCHABLE = frozenset(ANGLE_KEYS + VELOCITY_KEYS + POSITION_KEYS)
+_SEARCHABLE = frozenset(RATE_P_KEYS + ANGLE_KEYS + VELOCITY_KEYS + POSITION_KEYS)
 _CONTROLLER = re.compile(r"^(?:MPC_|MC_)")
 _HOVER = "MPC_THR_HOVER"
 _HOVER_THRUST = 0.5
 _STEPS = {
-    "rate": (),
+    "rate": RATE_P_KEYS,
     "angle": ANGLE_KEYS,
     "velocity": VELOCITY_KEYS,
     "position": POSITION_KEYS,
@@ -40,7 +41,7 @@ _STEPS = {
 
 
 def search_keys(step: str) -> tuple[str, ...]:
-    """Search knobs for one cascade step. Rate stays frozen."""
+    """Search knobs for one cascade step. Rate search is P only."""
     try:
         return _STEPS[step]
     except KeyError:
@@ -55,7 +56,7 @@ def gain_file(
         refused = [name for name in overrides if name not in _SEARCHABLE]
         if refused:
             raise ValueError(
-                "overrides must be angle, velocity, or position gains: "
+                "overrides must be rate P, angle, velocity, or position gains: "
                 + ", ".join(refused)
             )
     gained = {

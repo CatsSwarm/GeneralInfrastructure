@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-FACTORS: tuple[float, float] = (1.1, 0.9)
+FACTORS: tuple[float, ...] = (0.7, 0.85, 1.15, 1.3)
 
 
 def keep(current: float, proposed: float) -> bool:
@@ -17,25 +17,17 @@ def search_knobs(
 ) -> tuple[dict[str, float], float]:
     knobs = dict(start)
     score = evaluate(dict(knobs))
-    names = tuple(knobs)
-    while True:
-        kept_any = False
-        for name in names:
-            base = knobs[name]
-            best = knobs
-            best_score = score
-            kept_knob = False
-            for factor in FACTORS:
-                trial = dict(knobs)
-                trial[name] = base * factor
-                trial_score = evaluate(trial)
-                if keep(best_score, trial_score):
-                    best = trial
-                    best_score = trial_score
-                    kept_knob = True
-            if kept_knob:
-                knobs = best
-                score = best_score
-                kept_any = True
-        if not kept_any:
-            return knobs, score
+    for name in tuple(knobs):
+        base = knobs[name]
+        best = dict(knobs)
+        best_score = score
+        for factor in FACTORS:
+            trial = dict(knobs)
+            trial[name] = base * factor
+            trial_score = evaluate(trial)
+            if keep(best_score, trial_score):
+                best = trial
+                best_score = trial_score
+        knobs = best
+        score = best_score
+    return knobs, score

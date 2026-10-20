@@ -1,0 +1,53 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "tune_rate",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/calibration/tune_rate.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/calibration",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "justMyCode": true
+        },
+        {
+            "name": "tune_angle",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/calibration/tune_angle.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/calibration",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "justMyCode": true
+        },
+        {
+            "name": "tune_velocity",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/calibration/tune_velocity.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/calibration",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "justMyCode": true
+        },
+        {
+            "name": "tune_position",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/calibration/tune_position.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/calibration",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+            "justMyCode": true
+        }
+    ]
+}

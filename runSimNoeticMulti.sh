@@ -242,9 +242,11 @@ fi
 # -it aborts gzserver on this host (gazebo transport "Header is empty" /
 # std::length_error) once the full volume set is attached. Headless runs
 # have no client to attach, so they skip the TTY.
-DOCKER_TTY=(-it)
-if [ "${HEADLESS:-0}" = "1" ]; then
-    DOCKER_TTY=()
+# -it needs a terminal. The cascade starts this script with stdout on a file,
+# so a windowed run still skips -it and lets gzclient use the host display.
+DOCKER_TTY=()
+if [ "${HEADLESS:-0}" != "1" ] && [ -t 0 ]; then
+    DOCKER_TTY=(-it)
 fi
 docker run "${DOCKER_TTY[@]}" --net=host \
            --cap-drop=all \

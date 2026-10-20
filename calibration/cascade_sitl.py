@@ -36,8 +36,10 @@ def _script_path(script: Path) -> Path:
     return path
 
 
-def sitl_command(script: Path) -> list[str]:
-    return ["env", "HEADLESS=1", str(_script_path(script)), "--num", "1", "--world", "empty"]
+def sitl_command(script: Path, *, show_gazebo: bool = False) -> list[str]:
+    """One iris on an empty world. ``show_gazebo`` leaves the Gazebo window up."""
+    headless = "0" if show_gazebo else "1"
+    return ["env", f"HEADLESS={headless}", str(_script_path(script)), "--num", "1", "--world", "empty"]
 
 
 def _nearest_command(source: AxisLog, query_t: np.ndarray) -> np.ndarray:
@@ -153,11 +155,17 @@ def setpoints(step: str, flight: CascadeFlight) -> list[Setpoint]:
 
 
 _LINK = "udpin:0.0.0.0:14541"
+_CONTAINER = "px4-noetic-sim-ros"
+_CONTAINER_POLL_S = 0.5
+_CONTAINER_GONE_TIMEOUT_S = 30.0
+_HEARTBEAT_ATTEMPTS = 3
 _SERIES: tuple[str, ...] = (
     "roll_rate",
     "pitch_rate",
+    "yaw_rate",
     "roll",
     "pitch",
+    "yaw",
     "vx",
     "vy",
     "vz",
@@ -198,8 +206,45 @@ _HEARTBEAT_TIMEOUT_S = 90.0
 _STREAM_HZ = 50.0
 _PARAM_TIMEOUT_S = 2.0
 _ACK_TIMEOUT_S = 60.0
+_CLIMB_ALTITUDE_M = 10.0
+_CLIMB_TIMEOUT_S = 90.0
+# Plugin force is motorConstant * ω² on the rotor +Z, ω = command*1000+100.
+# 0.04 above the fitted hover command is about 1.2× weight. Command 0.5 is about 1.8×.
+_CLIMB_THRUST_MARGIN = 0.04
+# Thrust added per metre below the target, and per m/s of downward speed.
+_ALT_KP = 0.02
+_ALT_KD = 0.05
+_ALT_THRUST_ABOVE = 0.12
+_ALT_THRUST_BELOW = 0.03
+_ALT_VZ_KP = 0.35
+_ALT_VZ_LIMIT = 1.5
 _ECHO_REL_TOL = 1e-5
 _ECHO_ABS_TOL = 1e-5
+
+
+def _sim_container_names() -> list[str]:
+    """Names from ``docker ps -a``. A missing daemon counts as no container."""
+    try:
+        result = subprocess.run(
+            ["docker", "ps", "-a", "--format", "{{.Names}}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    stdout = getattr(result, "stdout", None) or ""
+    return [line.strip() for line in str(stdout).splitlines() if line.strip()]
+
+
+def _wait_until_sim_container_is_gone() -> None:
+    """Poll until ``px4-noetic-sim-ros`` is not listed. Do not start while it is."""
+    deadline = time.monotonic() + _CONTAINER_GONE_TIMEOUT_S
+    while _CONTAINER in _sim_container_names():
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"{_CONTAINER} is still present")
+        time.sleep(_CONTAINER_POLL_S)
 
 
 def fly_log(
@@ -210,30 +255,84 @@ def fly_log(
     *,
     runner,
     connect,
+    show_gazebo: bool = False,
+    flight_log: Path | None = None,
 ) -> dict[str, tuple[list[float], list[float]]]:
     """Replay one cascade step. ``runner`` and ``connect`` are required keywords.
 
     The host iris jinja is the file ``runSimNoeticMulti.sh`` already bind-mounts.
     This function does not copy that file into an image. Scored sample times are
     the replay clock. A non-blocking ``recv_match`` of ``None`` ends a drain; on
-    a live link that does not end the rest of the step.
+    a live link that does not end the rest of the step. The start waits until
+    ``px4-noetic-sim-ros`` is gone. A missing heartbeat is tried three times.
     """
     gains = _load_gains(gains_path)
     if not Path(model).is_file():
         raise FileNotFoundError(model)
-    proc = runner(sitl_command(Path("runSimNoeticMulti.sh")))
-    try:
-        master = connect(_LINK)
-        if _live(master):
-            _wait_heartbeat(master)
-        _send_gains(master, gains)
-        if _live(master):
-            _request_streams(master)
-        series = {name: ([], []) for name in _SERIES}
-        _stream(master, setpoints(step, flight), series)
-        return {name: (times, values) for name, (times, values) in series.items()}
-    finally:
-        _stop(proc)
+    for attempt in range(_HEARTBEAT_ATTEMPTS):
+        _wait_until_sim_container_is_gone()
+        proc = runner(sitl_command(Path("runSimNoeticMulti.sh"), show_gazebo=show_gazebo))
+        try:
+            master = connect(_LINK)
+            if _live(master):
+                _wait_heartbeat(master)
+            _send_gains(master, gains)
+            if _live(master):
+                _request_streams(master)
+            series = {name: ([], []) for name in _SERIES}
+            _stream(
+                master,
+                setpoints(step, flight),
+                series,
+                hover_command=float(flight.hover_command),
+            )
+            return {name: (times, values) for name, (times, values) in series.items()}
+        except TimeoutError as exc:
+            if str(exc) != f"no heartbeat on {_LINK}" or attempt + 1 == _HEARTBEAT_ATTEMPTS:
+                raise
+        finally:
+            if flight_log is not None:
+                try:
+                    _copy_px4_log(Path(flight_log))
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    print(f"PX4 log copy failed: {exc}", file=sys.stderr)
+            _stop(proc)
+
+
+def _copy_px4_log(dest: Path) -> bool:
+    """Copy the newest PX4 ULG out of the sim container before it is removed."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    found = subprocess.run(
+        [
+            "docker",
+            "exec",
+            _CONTAINER,
+            "bash",
+            "-lc",
+            "find /home/valentin/PX4-Autopilot -name '*.ulg' -printf '%T@ %p\\n' | sort -n | tail -1",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+    )
+    line = (found.stdout or "").strip()
+    if found.returncode != 0 or " " not in line:
+        print("no PX4 log copied", file=sys.stderr)
+        return False
+    source = line.split(maxsplit=1)[1]
+    copied = subprocess.run(
+        ["docker", "cp", f"{_CONTAINER}:{source}", str(dest)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    if copied.returncode != 0:
+        print(f"PX4 log copy failed: {copied.stderr.strip()}", file=sys.stderr)
+        return False
+    print(f"flight log {dest}", file=sys.stderr)
+    return True
 
 
 _PROC_WAIT_S = 30.0
@@ -319,10 +418,33 @@ def _wait_heartbeat(master) -> None:
 class _Vehicle:
     armed: bool = False
     offboard: bool = False
+    height_m: float | None = None
+    vz_down: float = 0.0
 
     @property
     def ready(self) -> bool:
         return self.armed and self.offboard
+
+
+def _climb_thrust(hover_command: float) -> float:
+    """Collective thrust just above the command that the motor plugin balances at weight."""
+    thrust = float(hover_command) + _CLIMB_THRUST_MARGIN
+    if not math.isfinite(thrust) or thrust <= 0.0:
+        raise ValueError(f"hover command {hover_command} cannot climb")
+    return min(thrust, 1.0)
+
+
+def _climb_wire(thrust: float):
+    """Level attitude and zero roll/pitch rate, so every rotor's +Z force stays vertical."""
+    return (
+        "attitude",
+        _YAW_RATE_IGNORE,
+        (1.0, 0.0, 0.0, 0.0),
+        0.0,
+        0.0,
+        math.nan,
+        float(thrust),
+    )
 
 
 def _wire_param(value: float, param_type: int) -> tuple[float, int]:
@@ -464,25 +586,32 @@ def _hold_setpoint(records: list[Setpoint]) -> Setpoint | None:
     return None
 
 
-def _stream(master, records: list[Setpoint], series: dict) -> None:
-    """Hold the first finite setpoint until armed in offboard, then play at 50 Hz.
+def _stream(master, records: list[Setpoint], series: dict, *, hover_command: float) -> None:
+    """Climb level to 10 m, then play the log at 50 Hz.
 
-    A master that cannot send setpoints returns without pacing the log. Scored
-    samples use the clock that starts when the vehicle is armed in offboard.
+    A master that cannot send setpoints returns without pacing the log. Until
+    the local height is at least 10 m the only setpoint is level attitude at
+    the climb thrust. Scored samples use the clock that starts after that.
     """
     if not _live(master):
         return
     if not records:
         raise TimeoutError("no COMMAND_ACK for OFFBOARD and arm")
-    hold = _hold_setpoint(records)
-    if hold is None:
+    if _hold_setpoint(records) is None:
         raise TimeoutError("no COMMAND_ACK for OFFBOARD and arm")
+    climb_thrust = _climb_thrust(hover_command)
+    climb = _climb_wire(climb_thrust)
+    blank = Setpoint("rate", 0.0, {}, frozenset())
     state = _Vehicle()
     arm_started = time.monotonic()
     deadline = arm_started + _ACK_TIMEOUT_S
     last_mode_s = 0.0
     next_tick = arm_started
     period = 1.0 / _STREAM_HZ
+    print(
+        f"climb at thrust {climb_thrust:.3f} until {_CLIMB_ALTITUDE_M:.0f} m",
+        file=sys.stderr,
+    )
     while not state.ready:
         if time.monotonic() > deadline:
             raise TimeoutError("no COMMAND_ACK for OFFBOARD and arm")
@@ -491,21 +620,91 @@ def _stream(master, records: list[Setpoint], series: dict) -> None:
         _poll(master, state, series, None)
         if state.ready:
             break
-        wire = _wire(hold, _commanded(hold))
-        if wire is not None:
-            _transmit(master, hold, wire)
+        _transmit(master, blank, climb)
         last_mode_s = _request_if_needed(master, state, last_mode_s, arm_started)
+    _climb_until(master, state, climb, blank)
     origin = time.monotonic()
     t0 = float(records[0].t_s)
     for tick in _stream_ticks(records, _STREAM_HZ):
         _pace(origin + (float(tick.t_s) - t0))
         _poll(master, state, series, _replay_time(t0, origin))
-        wire = _wire(tick, _commanded(tick))
+        wire = _hold_altitude(_wire(tick, _commanded(tick)), state, hover_command)
         if wire is not None:
             _transmit(master, tick, wire)
         if not state.ready:
             last_mode_s = _request_if_needed(master, state, last_mode_s, arm_started)
     _poll(master, state, series, _replay_time(t0, origin))
+
+
+def _altitude_thrust(height_m: float, vz_down: float, hover_command: float) -> float:
+    """Collective thrust that pulls the iris back to the climb altitude.
+
+    Hover thrust balances the weight only while the rotor +Z axes are vertical.
+    Body-rate commands tilt them, so the same collective descends. The correction
+    stays inside a band that is still well under throttle 0.5 on this motor map.
+    """
+    error_m = _CLIMB_ALTITUDE_M - float(height_m)
+    thrust = float(hover_command) + _ALT_KP * error_m + _ALT_KD * float(vz_down)
+    low = float(hover_command) - _ALT_THRUST_BELOW
+    high = min(1.0, float(hover_command) + _ALT_THRUST_ABOVE)
+    return min(max(thrust, low), high)
+
+
+def _hold_altitude(wire, state: _Vehicle, hover_command: float):
+    """Keep the climb altitude while the log's lateral commands still go out."""
+    if wire is None:
+        return None
+    height = _CLIMB_ALTITUDE_M if state.height_m is None else float(state.height_m)
+    if wire[0] == "attitude":
+        thrust = _altitude_thrust(height, state.vz_down, hover_command)
+        return (wire[0], wire[1] & ~_THROTTLE_IGNORE, wire[2], wire[3], wire[4], wire[5], thrust)
+    if wire[0] == "ned":
+        return _ned_hold(wire, height)
+    return wire
+
+
+def _ned_hold(wire, height_m: float):
+    _kind, mask, values = wire
+    values = list(values)
+    index = {name: position for position, (name, _bit) in enumerate(_NED_AXES)}
+    bits = {name: bit for name, bit in _NED_AXES}
+    # Positive vz is down. Above the target, command a descent.
+    vz = _ALT_VZ_KP * (float(height_m) - _CLIMB_ALTITUDE_M)
+    values[index["z"]] = -_CLIMB_ALTITUDE_M
+    values[index["vz"]] = min(max(vz, -_ALT_VZ_LIMIT), _ALT_VZ_LIMIT)
+    mask = int(mask) & ~bits["z"] & ~bits["vz"]
+    return ("ned", mask, values)
+
+
+def _climb_until(master, state: _Vehicle, climb, blank: Setpoint) -> None:
+    deadline = time.monotonic() + _CLIMB_TIMEOUT_S
+    next_tick = time.monotonic()
+    period = 1.0 / _STREAM_HZ
+    while True:
+        if time.monotonic() > deadline:
+            raise TimeoutError(f"did not reach {_CLIMB_ALTITUDE_M:.0f} m")
+        _pace(next_tick)
+        next_tick += period
+        _poll_until_height(master, state, _CLIMB_ALTITUDE_M)
+        if state.height_m is not None and state.height_m >= _CLIMB_ALTITUDE_M:
+            print(f"climb reached {state.height_m:.1f} m", file=sys.stderr)
+            return
+        _transmit(master, blank, climb)
+
+
+def _poll_until_height(master, state: _Vehicle, altitude_m: float) -> None:
+    """Drain until the local height is high enough, or the queue is empty.
+
+    Stop on the reaching sample so a later attitude message stays queued for
+    the scored replay. Nothing in this drain is scored.
+    """
+    while True:
+        message = master.recv_match(blocking=False)
+        if message is None:
+            return
+        _note_vehicle(state, message, master)
+        if state.height_m is not None and state.height_m >= altitude_m:
+            return
 
 
 def _request_if_needed(master, state: _Vehicle, last_mode_s: float, arm_started: float) -> float:
@@ -542,12 +741,22 @@ def _poll(master, state: _Vehicle, series: dict, t_s: float | None) -> None:
             return
 
 
-def _note_vehicle(state: _Vehicle, message, master) -> None:
-    if _message_type(message) != "HEARTBEAT":
-        return
+def _from_vehicle(message, master) -> bool:
     source = getattr(message, "get_srcSystem", None)
     target = getattr(master, "target_system", None)
     if callable(source) and target is not None and int(source()) != int(target):
+        return False
+    return True
+
+
+def _note_vehicle(state: _Vehicle, message, master) -> None:
+    if not _from_vehicle(message, master):
+        return
+    if _message_type(message) == "LOCAL_POSITION_NED":
+        state.height_m = -float(message.z)
+        state.vz_down = float(message.vz)
+        return
+    if _message_type(message) != "HEARTBEAT":
         return
     base_mode = int(message.base_mode)
     state.armed = bool(base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
@@ -721,8 +930,10 @@ def _record(series: dict, message, t_s: float) -> None:
     if kind == "ATTITUDE":
         _append(series, "roll_rate", t_s, message.rollspeed)
         _append(series, "pitch_rate", t_s, message.pitchspeed)
+        _append(series, "yaw_rate", t_s, getattr(message, "yawspeed", math.nan))
         _append(series, "roll", t_s, message.roll)
         _append(series, "pitch", t_s, message.pitch)
+        _append(series, "yaw", t_s, getattr(message, "yaw", math.nan))
     elif kind == "LOCAL_POSITION_NED":
         _append(series, "x", t_s, message.x)
         _append(series, "y", t_s, message.y)

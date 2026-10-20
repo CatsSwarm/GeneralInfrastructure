@@ -34,7 +34,16 @@ def _nearest_indices(source_t: np.ndarray, query_t: np.ndarray) -> np.ndarray:
     return np.where(use_earlier, earlier, index)
 
 
-def hover_command(path: Path) -> float:
+def hover_command(
+    path: Path,
+    t_start_s: float | None = None,
+    t_end_s: float | None = None,
+) -> float:
+    """Mean hover actuator. Optional bounds are seconds on the flight clock.
+
+    The clock origin matches ``load_flight``: the earliest angular-velocity,
+    attitude, or local-position sample.
+    """
     ulog = ULog(str(path))
     motors = ulog.get_dataset("actuator_motors").data
     position = ulog.get_dataset("vehicle_local_position").data
@@ -50,8 +59,17 @@ def hover_command(path: Path) -> float:
         )
         for channel in range(4)
     ])
-    motor_samples = [tuple(float(value) for value in row) for row in interpolated]
     nearest = _nearest_indices(landed_t, position_t)
     landed_flags = [bool(detected["landed"][int(index)]) for index in nearest]
     vz = [float(value) for value in position["vz"]]
+    if t_start_s is not None and t_end_s is not None:
+        angular_t = ulog.get_dataset("vehicle_angular_velocity").data["timestamp"]
+        attitude_t = ulog.get_dataset("vehicle_attitude").data["timestamp"]
+        origin_us = float(min(angular_t[0], attitude_t[0], position_t[0]))
+        seconds = (position_t - origin_us) * 1e-6
+        keep = (seconds >= float(t_start_s)) & (seconds <= float(t_end_s))
+        interpolated = interpolated[keep]
+        landed_flags = [flag for flag, used in zip(landed_flags, keep, strict=True) if used]
+        vz = [speed for speed, used in zip(vz, keep, strict=True) if used]
+    motor_samples = [tuple(float(value) for value in row) for row in interpolated]
     return hover_mean(landed_flags, vz, motor_samples)
