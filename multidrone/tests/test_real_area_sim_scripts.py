@@ -51,3 +51,20 @@ def test_runsim_cylinders_is_empty_like_and_has_radius_flag():
     sitl = SITL.read_text()
     assert "spawn_cylinders" in sitl
     assert "CATSWARM_WORLD" in sitl
+
+
+def test_runsim_starts_host_rc_radio_and_kills_it_on_cleanup():
+    text = RUN.read_text()
+    start = text.index("sim_rc_radio.py")
+    docker = text.index("docker run ")
+    assert start < docker
+    assert "--num" in text[start:docker]
+    cleanup = text.split("cleanup_on_exit()")[1].split("Default values")[0]
+    assert "sim_rc_radio.py" in cleanup
+    assert "pkill" in cleanup
+    launch = text.index('sim_rc_radio.py" --num')
+    assert launch < docker
+    after_trap = text.split("trap cleanup_on_exit EXIT INT TERM", 1)[1]
+    assert after_trap.index("cleanup_on_exit") < after_trap.index('sim_rc_radio.py" --num')
+    real_docker = text.index('docker run "${DOCKER_TTY[@]}"')
+    assert "sim_rc_radio.py" not in text[real_docker:]

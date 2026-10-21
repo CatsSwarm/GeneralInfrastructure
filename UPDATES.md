@@ -2,6 +2,9 @@
 
 This file documents the development progress and changes made to the `CatSwarm/general_infrastructure` project by the AI agent.
 
+## 2.4.0 - Sim RC radio
+- The host radio feeds `RC_CHANNELS_OVERRIDE` and the adapter is unchanged.
+
 ## 2.0.1 - 2026-10-20 Cascade stages keep their own logs
 - Each tune stage writes `parameter_history.jsonl` and `logs/trial_NNN.ulg` under `calibration/results/cascade/stages/<step>/`. A new run of that step starts the history file clean. A later step does not replace an earlier step's winning log.
 - `run_cascade()` prints the four `python3 -m calibration.tune_*` commands and returns 2. It does not fly or search. `popen_sim`, `_connect`, `_repo_path`, and `SHOW_GAZEBO` stay in that module for the tune programs.

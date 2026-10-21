@@ -25,6 +25,10 @@ cleanup_on_exit() {
     
     # Clean up processes
     echo "Killing related processes..."
+    if [[ -n "${SIM_RC_RADIO_PID:-}" ]]; then
+        kill "${SIM_RC_RADIO_PID}" 2>/dev/null || true
+    fi
+    pkill -f "multidrone/sim_rc_radio.py" 2>/dev/null || true
     pkill -x px4 2>/dev/null || true
     pkill gzclient 2>/dev/null || true
     pkill gzserver 2>/dev/null || true
@@ -151,6 +155,9 @@ trap cleanup_on_exit EXIT INT TERM
 
 # Initial cleanup to ensure clean state
 cleanup_on_exit
+
+python3 "${SCRIPT_DIR}/multidrone/sim_rc_radio.py" --num "${NUM_DRONES}" &
+SIM_RC_RADIO_PID=$!
 
 # Setup X11 forwarding
 xhost + 2>/dev/null || true
