@@ -57,7 +57,9 @@ function spawn_model() {
 	# CatSwarm: optical flow + rangefinder → OPTICAL_FLOW / DISTANCE_SENSOR.
 	# CATSWARM_OF_MODE=mockup (default) uses the non-rendering flow plugin so OF also
 	# streams headless; =camera restores the px4flow camera path (needs GL).
-	if [ "$MODEL" = "iris" ]; then
+	# HIL iris.sdf.jinja already carries the 20 Hz camera. Sensor inject is the
+	# empty-world / VIO path and would stack a second camera onto that model.
+	if [ "$MODEL" = "iris" ] && [ "${CATSWARM_WORLD:-}" != "simple_hil" ] && [ "${CATSWARM_WORLD:-}" != "hil_city" ]; then
 		INJECT_SENSORS="${INJECT_IRIS_SENSORS:-/home/valentin/PX4-Autopilot/Tools/simulation/inject_iris_sensors.py}"
 		if [ -f "$INJECT_SENSORS" ]; then
 			python3 "$INJECT_SENSORS" /tmp/${MODEL}_${N}.sdf
@@ -149,6 +151,12 @@ sleep 1
 source ${src_path}/Tools/simulation/gazebo-classic/setup_gazebo.bash ${src_path} ${src_path}/build/${target}
 
 export GAZEBO_MODEL_PATH="${GAZEBO_MODEL_PATH}:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/catswarm_host"
+if [ -d /home/valentin/catswarm_models ]; then
+	export GAZEBO_MODEL_PATH="${GAZEBO_MODEL_PATH}:/home/valentin/catswarm_models"
+fi
+if [ -d /home/valentin/catswarm_city/models ]; then
+	export GAZEBO_MODEL_PATH="${GAZEBO_MODEL_PATH}:/home/valentin/catswarm_city/models"
+fi
 
 # ROS2: gazebo_ros init/factory. ROS1 (Noetic): API plugin so model camera
 # plugins can advertise. Start roscore only when the master is down.
@@ -176,7 +184,11 @@ GAZEBO11_PLUGINS="/usr/lib/x86_64-linux-gnu/gazebo-11/plugins"
 if [ -d "${GAZEBO11_PLUGINS}" ]; then
 	export LD_LIBRARY_PATH="${GAZEBO11_PLUGINS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
-gzserver ${src_path}/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/${gz_world}.world --verbose $ros_args &
+GZ_WORLD_FILE="${src_path}/Tools/simulation/gazebo-classic/sitl_gazebo-classic/worlds/${gz_world}.world"
+if [ -f "/home/valentin/catswarm_worlds/${world}.world" ]; then
+	GZ_WORLD_FILE="/home/valentin/catswarm_worlds/${world}.world"
+fi
+gzserver "${GZ_WORLD_FILE}" --verbose $ros_args &
 sleep 5
 
 # Read positions from file if provided
@@ -204,6 +216,20 @@ if [ -n "${POSITIONS_FILE}" ]; then
 		line_num=$((line_num + 1))
 	done < "${POSITIONS_FILE}"
 	echo "Loaded ${#positions_x[@]} positions from file"
+	# simple_hil roads end near y=52. A leftover hil_city pad must not spawn there.
+	if [ "$world" = "simple_hil" ] && [ ${#positions_y[@]} -gt 0 ]; then
+		north_field=0
+		for yv in "${positions_y[@]}"; do
+			awk -v y="$yv" 'BEGIN { exit !(y+0 > 60) }' && north_field=1
+		done
+		if [ "$north_field" = "1" ]; then
+			echo "simple_hil: north-field XY is outside the downtown crop; using parking line x=0 y=3*n"
+			for i in "${!positions_y[@]}"; do
+				positions_x[$i]=0
+				positions_y[$i]=$((3 * (i + 1)))
+			done
+		fi
+	fi
 	# Automatically set num_vehicles to number of positions if -n was not explicitly provided
 	if [ "$NUM_VEHICLES_SET" = "false" ]; then
 		num_vehicles=${#positions_x[@]}

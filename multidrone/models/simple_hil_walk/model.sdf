@@ -1,0 +1,16 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <!-- Mesh container only. simple_hil.world uses this DAE as an &lt;actor&gt; skin. -->
+  <model name="simple_hil_walk">
+    <static>true</static>
+    <link name="link">
+      <visual name="visual">
+        <geometry>
+          <mesh>
+            <uri>model://simple_hil_walk/meshes/walk.dae</uri>
+          </mesh>
+        </geometry>
+      </visual>
+    </link>
+  </model>
+</sdf>

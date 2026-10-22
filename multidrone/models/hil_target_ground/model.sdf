@@ -1,0 +1,24 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <model name="hil_target_ground">
+    <static>true</static>
+    <pose>0 0 0.08 0 0 0</pose>
+    <link name="link">
+      <visual name="visual">
+        <cast_shadows>false</cast_shadows>
+        <geometry>
+          <box>
+            <size>40 30 0.02</size>
+          </box>
+        </geometry>
+        <material>
+          <script>
+            <uri>model://hil_target_ground/materials/scripts</uri>
+            <uri>model://hil_target_ground/materials/textures</uri>
+            <name>HilTargetGround/Image</name>
+          </script>
+        </material>
+      </visual>
+    </link>
+  </model>
+</sdf>

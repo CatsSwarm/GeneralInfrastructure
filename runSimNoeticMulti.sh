@@ -5,6 +5,10 @@
 
 # Get script directory to make paths invariant to project location
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=docker_sudo.sh
+source "${SCRIPT_DIR}/docker_sudo.sh"
+# shellcheck source=multidrone/write_sitl_spawn_map.sh
+source "${SCRIPT_DIR}/multidrone/write_sitl_spawn_map.sh"
 
 CONTAINER_NAME="px4-noetic-sim-ros"
 
@@ -15,7 +19,7 @@ cleanup_on_exit() {
     
     # Remove container
     echo "Removing container..."
-    docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
+    catswarm_docker rm -f ${CONTAINER_NAME} 2>/dev/null || true
     
     # Clean up X11
     echo "Cleaning up X11 resources..."
@@ -170,7 +174,10 @@ fi
 # Build docker run command with conditional XAUTHORITY volume
 XAUTH_FILE="${XAUTHORITY:-$HOME/.Xauthority}"
 
-# Determine positions file mount
+# Use the image PX4 tree. Do not mount a host catkin checkout over
+# /home/valentin/PX4-Autopilot: that replaces build/px4_sitl_default/bin/px4.
+# File overlays (positions, sitl_multiple_run2.sh, and for HIL worlds the
+# iris camera template) still bind onto the image tree.
 DEFAULT_POSITIONS="${SCRIPT_DIR}/multidrone/positions.txt"
 if [ "$POSITIONS_FILE" = "$DEFAULT_POSITIONS" ]; then
     # Use default positions file location
@@ -203,6 +210,50 @@ else
     )
 fi
 
+# HIL worlds: iris_1 camera template (20 Hz HEVC), local props, city assets.
+# x265enc is the encoder. nvh265enc stays off unless CATSWARM_GST_NVENC=1.
+if [ "$WORLD" = "simple_hil" ] || [ "$WORLD" = "hil_city" ]; then
+    CITY_ASSETS="${SCRIPT_DIR}/multidrone/city_assets"
+    HIL_WORLDS="${SCRIPT_DIR}/multidrone/worlds"
+    NEED_CITY_ASSETS=0
+    if [ "${WORLD}" = "hil_city" ] && [ ! -f "${CITY_ASSETS}/worlds/hil_city.world" ]; then
+        NEED_CITY_ASSETS=1
+    fi
+    if [ "${WORLD}" = "simple_hil" ] && [ ! -d "${CITY_ASSETS}/models/house_1" ]; then
+        NEED_CITY_ASSETS=1
+    fi
+    if [ "${NEED_CITY_ASSETS}" = "1" ] && [ -x "${SCRIPT_DIR}/multidrone/fetch_hil_city.sh" ]; then
+        echo "City models missing; fetching OSRF citysim assets (once)…"
+        "${SCRIPT_DIR}/multidrone/fetch_hil_city.sh" || true
+    fi
+    DOCKER_VOLUMES+=(
+        --volume="${SCRIPT_DIR}/multidrone/iris.sdf.jinja:/home/valentin/PX4-Autopilot/Tools/simulation/gazebo-classic/sitl_gazebo-classic/models/iris/iris.sdf.jinja:ro"
+        --volume="${SCRIPT_DIR}/multidrone/models:/home/valentin/catswarm_models:ro"
+        --volume="${HIL_WORLDS}:/home/valentin/catswarm_worlds:ro"
+    )
+    GST_CAMERA_PLUGIN="${SCRIPT_DIR}/../vision_hil/host/gst_camera_plugin/libgazebo_gst_camera_plugin.so"
+    if [ -f "${GST_CAMERA_PLUGIN}" ]; then
+        DOCKER_VOLUMES+=(
+            --volume="${GST_CAMERA_PLUGIN}:/home/valentin/PX4-Autopilot/build/px4_sitl_default/build_gazebo-classic/libgazebo_gst_camera_plugin.so:ro"
+        )
+        echo "GstCameraPlugin: bind-mount ${GST_CAMERA_PLUGIN}"
+    fi
+    GST_NVENC_PLUGIN="${SCRIPT_DIR}/../vision_hil/host/gst_nvenc/plugin"
+    if [ "${CATSWARM_GST_NVENC:-0}" = "1" ] && [ -f "${GST_NVENC_PLUGIN}/libgstnvenc.so" ]; then
+        DOCKER_VOLUMES+=(
+            --volume="${GST_NVENC_PLUGIN}:/opt/catswarm/gst:ro"
+        )
+        echo "GstNvenc: GST_PLUGIN_PATH=/opt/catswarm/gst (${GST_NVENC_PLUGIN})"
+    else
+        echo "GstNvenc: skipped (CATSWARM_GST_NVENC=${CATSWARM_GST_NVENC:-0}); encoder is x265enc"
+    fi
+    if [ -d "${CITY_ASSETS}/models" ]; then
+        DOCKER_VOLUMES+=(--volume="${CITY_ASSETS}:/home/valentin/catswarm_city:ro")
+    fi
+    echo "Gazebo world: ${WORLD}"
+    NUM_DRONES="${NUM_DRONES}" POSITIONS_FILE="${POSITIONS_FILE}" CATSWARM_WORLD="${WORLD}" write_sitl_spawn_map
+fi
+
 # Add XAUTHORITY volume only if file exists
 if [ -f "$XAUTH_FILE" ]; then
     DOCKER_VOLUMES+=(--volume="${XAUTH_FILE}:${XAUTH_FILE}:ro")
@@ -218,14 +269,39 @@ if [[ "$WORLD" != "empty" && "$WORLD" != "cylinders" ]]; then
     )
 fi
 
-# Run docker container with the simulation command
 # Pin Gazebo transport to loopback. Without this, gzserver floods
 # "Exception sending a multicast message: Network is unreachable" on hosts
 # with no working multicast route; after a while simulator_mavlink poll
 # timeouts freeze HIL (DISTANCE_SENSOR / OF / IMU stop → FLIG bottom_clearance=-1).
-docker run -it --net=host \
+DOCKER_GPU=()
+if [ "$WORLD" = "simple_hil" ] || [ "$WORLD" = "hil_city" ]; then
+    if [ "${CATSWARM_SIM_GPU:-1}" != "0" ] && command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+        DOCKER_GPU=(--gpus all)
+        if command -v nvidia-settings >/dev/null 2>&1 && [ -n "${DISPLAY:-}" ]; then
+            # Adaptive PowerMizer parks the Ada GPU. 1080p @ 20 Hz then misses realtime.
+            nvidia-settings -a '[gpu:0]/GPUPowerMizerMode=1' >/dev/null 2>&1 || true
+            echo "NVIDIA PowerMizer=1 (max performance)"
+        fi
+    fi
+fi
+HIL_ENV=()
+if [ "$WORLD" = "simple_hil" ] || [ "$WORLD" = "hil_city" ]; then
+    HIL_ENV=(
+        --env="PX4_VIDEO_HOST_IP=${PX4_VIDEO_HOST_IP:-127.0.0.1}"
+        --env="CATSWARM_HIL_CAM_PITCH=${CATSWARM_HIL_CAM_PITCH:-45}"
+        --env="CATSWARM_GZCLIENT=${CATSWARM_GZCLIENT:-1}"
+        --env="CATSWARM_GST_BITRATE=${CATSWARM_GST_BITRATE:-4000}"
+        --env="CATSWARM_GST_SPEED_PRESET=${CATSWARM_GST_SPEED_PRESET:-1}"
+        --env="CATSWARM_GST_NVENC=${CATSWARM_GST_NVENC:-0}"
+        --env="__NV_PRIME_RENDER_OFFLOAD=1"
+        --env="__GLX_VENDOR_LIBRARY_NAME=nvidia"
+        --env="NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display,video"
+    )
+fi
+catswarm_docker run -it --net=host \
            --cap-drop=all \
            --privileged \
+           "${DOCKER_GPU[@]}" \
            --env="DISPLAY=$DISPLAY" \
            --env="QT_X11_NO_MITSHM=1" \
            --env="CATSWARM_OF_MODE=${CATSWARM_OF_MODE:-mockup}" \
@@ -236,6 +312,7 @@ docker run -it --net=host \
            --env="GAZEBO_IP=127.0.0.1" \
            --env="GAZEBO_MASTER_URI=http://127.0.0.1:11345" \
            --env="XAUTHORITY=${XAUTH_FILE}" \
+           "${HIL_ENV[@]}" \
            "${PX4_HOME_ENV[@]}" \
            "${DOCKER_VOLUMES[@]}" \
            --name=${CONTAINER_NAME} \
